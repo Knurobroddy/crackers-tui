@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "valheim-test",
+  "game_id": "valheim",
+  "name": "Test pack",
+  "version": "2026.09.22",
+  "owned_dirs": [
+    "BepInEx"
+  ],
+  "files": {
+    "common": [
+      {
+        "url": "files/crackers-test.cfg",
+        "sha256": "0ec9ec430fc0f65d51dc782f5944b6dac39f71b3c71b1a17e1bf5f3ea09d36ad",
+        "size": 47,
+        "kind": "file",
+        "dest": "BepInEx/config/crackers-test.cfg"
+      }
+    ],
+    "windows": [
+      {
+        "url": "files/BepInExPack_Valheim.zip",
+        "sha256": "21afa4be26b0fbef7cbe6917b64a1874bbe9d289bfe003c31a4c7c3fc3e40838",
+        "size": 1944,
+        "kind": "zip",
+        "dest": "",
+        "zip_root": "BepInExPack_Valheim/"
+      },
+      {
+        "url": "files/SomeMod.dll",
+        "sha256": "1c74a507b6ca9f03499eb6e847c593d103470e345b0c914bd9fa59edcfd363c9",
+        "size": 24,
+        "kind": "file",
+        "dest": "BepInEx/plugins/SomeMod.dll"
+      }
+    ]
+  },
+  "hooks": [
+    {
+      "type": "proton_dll_override",
+      "builds": [
+        "linux_proton"
+      ],
+      "dll": "winhttp",
+      "mode": "native,builtin"
+    }
+  ],
+  "loader": null
+}

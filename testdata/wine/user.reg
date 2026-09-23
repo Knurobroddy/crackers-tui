@@ -1,0 +1,21 @@
+WINE REGISTRY Version 2
+;; All keys relative to \\User\\S-1-5-21-0-0-0-1000
+
+#arch=win64
+
+[Control Panel\\Desktop] 1726999000
+#time=1db0c3f9a8b3c4e
+"ActiveWndTrackTimeout"=dword:00000000
+"FontSmoothing"="2"
+
+[Software\\Wine\\DllOverrides] 1726999999
+#time=1db0c3fa0f5e2a4
+"atl100"="native,builtin"
+"d3d11"="native"
+"msvcp140"="native,builtin"
+
+[Software\\Wine\\Fonts\\Replacements] 1726999000
+#time=1db0c3f9a8b3c4e
+"winhttp"="must-not-be-touched"
+"Arial"="Liberation Sans"
+

@@ -1,0 +1,28 @@
+"AppState"
+{
+	"appid"		"892970"
+	"universe"		"1"
+	"LauncherPath"		"C:\\Program Files (x86)\\Steam\\steam.exe"
+	"name"		"Valheim"
+	"StateFlags"		"4"
+	"installdir"		"Valheim"
+	"LastUpdated"		"1726999999"
+	"SizeOnDisk"		"1063624283"
+	"buildid"		"15451236"
+	"InstalledDepots"
+	{
+		"892971"
+		{
+			"manifest"		"1234567890123456789"
+			"size"		"1063624283"
+		}
+	}
+	"UserConfig"
+	{
+		"language"		"english"
+	}
+	"MountedConfig"
+	{
+		"language"		"english"
+	}
+}

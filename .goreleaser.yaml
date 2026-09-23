@@ -1,0 +1,45 @@
+# GoReleaser v2 configuration (ADR-001 §7).
+# Produces, per release:
+#   crackers-modinst_<version>_windows_amd64.zip     (contains crackers-modinst.exe)
+#   crackers-modinst_<version>_linux_amd64.tar.gz    (contains crackers-modinst)
+#   checksums.txt                                    (validated by self-update)
+version: 2
+
+project_name: crackers-modinst
+
+builds:
+  - id: crackers-modinst
+    main: ./cmd/crackers-modinst
+    binary: crackers-modinst
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+      - linux
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: crackers-modinst
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Only the binary: self-update extracts it by name.
+    files:
+      - none*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc

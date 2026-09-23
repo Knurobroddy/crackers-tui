@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "min_app_version": "0.1.0",
+  "games": [
+    {
+      "id": "valheim",
+      "name": "Valheim",
+      "strategy": "steam",
+      "steam": {
+        "appid": 892970
+      },
+      "not_found_hint": "On Linux, Valheim must run via Proton (Steam → Properties → Compatibility) and be launched once.",
+      "builds": [
+        {
+          "id": "windows",
+          "os": "windows",
+          "anchor": "valheim.exe",
+          "files": "windows"
+        },
+        {
+          "id": "linux_proton",
+          "os": "linux",
+          "anchor": "valheim.exe",
+          "files": "windows"
+        }
+      ]
+    }
+  ]
+}

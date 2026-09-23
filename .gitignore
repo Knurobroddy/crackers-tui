@@ -1,0 +1,6 @@
+/dist/
+/crackers-modinst
+/crackers-modinst.exe
+
+# Agent notes and handovers (local only; ADRs in .claude/ stay tracked)
+/.claude/notes/

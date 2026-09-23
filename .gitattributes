@@ -1,0 +1,4 @@
+* text=auto eol=lf
+# Fixtures are compared byte for byte (user.reg round trips, hashes in manifests).
+testdata/** -text
+*.zip binary
