@@ -50,6 +50,15 @@ func newProtonDLLOverride(raw json.RawMessage) (Hook, error) {
 	return &h, nil
 }
 
+// wineRegRestore is the marker form of the wine_reg_restore undo action.
+type wineRegRestore struct {
+	Op       string  `json:"op"`
+	File     string  `json:"file"`
+	Section  string  `json:"section"`
+	Name     string  `json:"name"`
+	Previous *string `json:"previous"` // null: the value did not exist
+}
+
 // FindUserReg returns <library>/steamapps/compatdata/<appid>/pfx/user.reg,
 // looking in the game's own library first and then in all Steam libraries.
 func FindUserReg(extra map[string]string) (string, error) {
@@ -113,15 +122,6 @@ func (h *protonDLLOverride) Apply(ctx HookCtx) ([]UndoAction, error) {
 	}
 	slog.Debug("set wine dll override", "path", h.regPath, "dll", h.DLL, "mode", h.Mode, "previous", prev, "backup", backup)
 	return []UndoAction{undo}, nil
-}
-
-// wineRegRestore is the marker form of the wine_reg_restore undo action.
-type wineRegRestore struct {
-	Op       string  `json:"op"`
-	File     string  `json:"file"`
-	Section  string  `json:"section"`
-	Name     string  `json:"name"`
-	Previous *string `json:"previous"` // null: the value did not exist
 }
 
 func runWineRegRestore(raw json.RawMessage) error {

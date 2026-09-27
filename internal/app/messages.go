@@ -59,6 +59,22 @@ func UserMessage(err error) string {
 	return strings.Join(advice, "\n\n") + "\n\nDetails: " + capitalize(err.Error())
 }
 
+// ListPaths formats up to limit paths, one per line; folders are marked.
+func ListPaths(paths []string, limit int) string {
+	var b strings.Builder
+	for i, path := range paths {
+		if i == limit {
+			fmt.Fprintf(&b, "  … and %d more", len(paths)-limit)
+			break
+		}
+		if strings.HasSuffix(path, "/") {
+			path += " (folder)"
+		}
+		fmt.Fprintf(&b, "  %s\n", path)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func isBareSentinel(err error) bool {
 	for _, sentinel := range bareSentinels {
 		//nolint:errorlint // identity on purpose: a wrapped or joined sentinel carries extra context and keeps its Details line
@@ -115,22 +131,6 @@ func previousHooksUndoneMessage(err error) (string, bool) {
 func rollbackIncompleteMessage(err error) (string, bool) {
 	return "Some changes could not be undone after the failure. Check the game folder, or reinstall the pack.",
 		errors.Is(err, engine.ErrRollbackIncomplete)
-}
-
-// ListPaths formats up to limit paths, one per line; folders are marked.
-func ListPaths(paths []string, limit int) string {
-	var b strings.Builder
-	for i, path := range paths {
-		if i == limit {
-			fmt.Fprintf(&b, "  … and %d more", len(paths)-limit)
-			break
-		}
-		if strings.HasSuffix(path, "/") {
-			path += " (folder)"
-		}
-		fmt.Fprintf(&b, "  %s\n", path)
-	}
-	return strings.TrimRight(b.String(), "\n")
 }
 
 func capitalize(s string) string {

@@ -82,6 +82,18 @@ func NewDownloader(appVersion string) *Client {
 	}
 }
 
+// downloadLimits bounds one download.
+type downloadLimits struct {
+	size       int64 // > 0: expected size; the read is capped at size+1
+	rejectHTML bool
+}
+
+// downloadResult is the outcome of a completed download.
+type downloadResult struct {
+	sha256 string
+	size   int64
+}
+
 // Resolve resolves ref (absolute or relative to the base) to an http(s) URL.
 func (c *Client) Resolve(ref string) (string, error) {
 	parsed, err := url.Parse(ref)
@@ -294,18 +306,6 @@ func (c *Client) download(ctx context.Context, url, dst string, limits downloadL
 		return downloadResult{}, fmt.Errorf("download %s: %w", url, err)
 	}
 	return result, nil
-}
-
-// downloadLimits bounds one download.
-type downloadLimits struct {
-	size       int64 // > 0: expected size; the read is capped at size+1
-	rejectHTML bool
-}
-
-// downloadResult is the outcome of a completed download.
-type downloadResult struct {
-	sha256 string
-	size   int64
 }
 
 // verifyDownload checks a completed download against the expected entry.
