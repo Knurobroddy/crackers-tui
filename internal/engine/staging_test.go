@@ -34,17 +34,17 @@ func assertNoStaging(t *testing.T, root string) {
 }
 
 func TestEngine_Install_reinstallOrSwitchFails_keepsOldPack(t *testing.T) {
-	markerWrite := faultyFiles{op: "rename", pathMatch: config.MarkerFileName + config.TmpSuffix, nth: 1}
+	markerWrite := faultyFiles{op: "rename", pathMatch: config.MarkerFileName + config.TempSuffix, nth: 1}
 	for _, tc := range []struct {
 		name       string
 		switchPack bool
 		files      faultyFiles
 		hooksLost  bool // the old pack's game settings were already undone
 	}{
-		{"reinstall-file-1", false, faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 1}, false},
-		{"reinstall-file-4", false, faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 4}, false},
+		{"reinstall-file-1", false, faultyFiles{op: "rename", pathMatch: config.TempSuffix, nth: 1}, false},
+		{"reinstall-file-4", false, faultyFiles{op: "rename", pathMatch: config.TempSuffix, nth: 4}, false},
 		{"reinstall-marker", false, markerWrite, true},
-		{"switch-file-1", true, faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 1}, false},
+		{"switch-file-1", true, faultyFiles{op: "rename", pathMatch: config.TempSuffix, nth: 1}, false},
 		{"switch-marker", true, markerWrite, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -213,7 +213,7 @@ func TestEngine_Install_crashDuringReinstall_nextRemoveRecovers(t *testing.T) {
 		name  string
 		files faultyFiles
 	}{
-		{"file", faultyFiles{op: "create", pathMatch: config.TmpSuffix, nth: 3, crash: true}},
+		{"file", faultyFiles{op: "create", pathMatch: config.TempSuffix, nth: 3, crash: true}},
 		{"staging", faultyFiles{op: "removeall", pathMatch: config.StagingDirName, nth: 1, crash: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -94,7 +94,7 @@ func (h *protonDLLOverride) Apply(ctx HookCtx) ([]UndoAction, error) {
 	if err != nil {
 		return nil, err
 	}
-	backup := h.regPath + config.BakSuffix
+	backup := h.regPath + config.BackupSuffix
 	if err := os.WriteFile(backup, data, info.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("back up %s: %w", h.regPath, err)
 	}

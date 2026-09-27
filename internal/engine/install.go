@@ -449,7 +449,7 @@ func (e *Engine) ensureDir(root, rel string, journal *installJournal) error {
 // writePlanFile writes file to <target>.modinst-tmp and renames it into
 // place, so the target is never partly written.
 func (e *Engine) writePlanFile(file planFile, journal *installJournal) error {
-	tempPath := file.Abs + config.TmpSuffix
+	tempPath := file.Abs + config.TempSuffix
 	sum, err := e.writePlanFileTemp(file, tempPath)
 	if err != nil {
 		_ = e.files.Remove(tempPath)

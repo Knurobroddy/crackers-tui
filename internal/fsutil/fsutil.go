@@ -9,10 +9,10 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 )
 
-// WriteAtomic writes data to path via path+TmpSuffix and a rename, so readers
+// WriteAtomic writes data to path via path+TempSuffix and a rename, so readers
 // never see a partial file. The temporary file is removed on error.
 func WriteAtomic(path string, data []byte, perm os.FileMode) error {
-	tempPath := path + config.TmpSuffix
+	tempPath := path + config.TempSuffix
 	if err := os.WriteFile(tempPath, data, perm); err != nil {
 		_ = os.Remove(tempPath)
 		return err

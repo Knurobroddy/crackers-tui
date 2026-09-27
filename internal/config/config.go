@@ -28,10 +28,10 @@ const (
 	StagingDirName = "." + AppSlug + "-old"
 	// LogFileName is created in os.TempDir() and truncated on every start.
 	LogFileName = AppSlug + ".log"
-	// TmpSuffix is appended to files while they are being written.
-	TmpSuffix = ".modinst-tmp"
-	// BakSuffix is appended to backups of files edited by hooks.
-	BakSuffix = ".modinst-bak"
+	// TempSuffix is appended to files while they are being written.
+	TempSuffix = ".modinst-tmp"
+	// BackupSuffix is appended to backups of files edited by hooks.
+	BackupSuffix = ".modinst-bak"
 
 	// ChecksumsAsset is the GoReleaser checksum file validated by self-update.
 	ChecksumsAsset = "checksums.txt"

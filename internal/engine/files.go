@@ -66,10 +66,10 @@ func writeFile(files FileWriter, path string, data []byte, perm fs.FileMode) err
 	return out.Close()
 }
 
-// writeAtomic writes data to path via path+TmpSuffix and a rename, so readers
+// writeAtomic writes data to path via path+TempSuffix and a rename, so readers
 // never see a partial file.
 func writeAtomic(files FileWriter, path string, data []byte, perm fs.FileMode) error {
-	tempPath := path + config.TmpSuffix
+	tempPath := path + config.TempSuffix
 	if err := writeFile(files, tempPath, data, perm); err != nil {
 		_ = files.Remove(tempPath)
 		return err

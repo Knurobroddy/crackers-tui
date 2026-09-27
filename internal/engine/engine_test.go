@@ -374,9 +374,9 @@ func TestEngine_Install_writeFails_rollsBackToVanilla(t *testing.T) {
 		name  string
 		files faultyFiles
 	}{
-		{"file-1", faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 1}},
-		{"file-4", faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 4}},
-		{"marker", faultyFiles{op: "rename", pathMatch: config.MarkerFileName + config.TmpSuffix, nth: 1}},
+		{"file-1", faultyFiles{op: "rename", pathMatch: config.TempSuffix, nth: 1}},
+		{"file-4", faultyFiles{op: "rename", pathMatch: config.TempSuffix, nth: 4}},
+		{"marker", faultyFiles{op: "rename", pathMatch: config.MarkerFileName + config.TempSuffix, nth: 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newFakeRemote(t)
