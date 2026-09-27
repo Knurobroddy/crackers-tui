@@ -27,6 +27,7 @@ func TestUserMessage_knownErrors_containAdvice(t *testing.T) {
 		{"nothing to remove", engine.ErrNothingToRemove, "Nothing to remove", false},
 		{"leftovers", &engine.LeftoversError{Root: "/g", Paths: []string{"BepInEx/"}}, "Leftover mod files", true},
 		{"rollback incomplete", errors.Join(engine.ErrRollbackIncomplete, errors.New("x")), "could not be undone", true},
+		{"invalid pack", fmt.Errorf("%w: x is written twice", engine.ErrInvalidPack), "This modpack is broken. Please tell the pack's author.", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := app.UserMessage(tc.err)

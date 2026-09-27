@@ -19,6 +19,9 @@ var (
 	// ErrRollbackIncomplete is joined into an install error when rollback or
 	// restoring the previous pack also failed.
 	ErrRollbackIncomplete = errors.New("rollback incomplete")
+	// ErrInvalidPack wraps an install error caused by a broken pack: a manifest
+	// for another pack or game, or files that conflict with each other.
+	ErrInvalidPack = errors.New("invalid pack")
 )
 
 // PermissionError is returned when the OS refuses a write.

@@ -483,6 +483,36 @@ func TestEngine_Install_unsafeManifest_failsBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestEngine_Install_brokenPack_returnsErrInvalidPack(t *testing.T) {
+	good := []byte("x")
+	cases := map[string]map[string]any{
+		"wrong game": {"game_id": "minecraft"},
+		"wrong id":   {"id": "other-pack"},
+		"duplicate": {"files": map[string]any{"common": []any{
+			entry("files/x", good, "file", "a/x.dll", ""), entry("files/x", good, "file", "a/x.dll", ""),
+		}}},
+		"file and dir": {"files": map[string]any{"common": []any{
+			entry("files/x", good, "file", "a", ""), entry("files/x", good, "file", "a/x.dll", ""),
+		}}},
+	}
+	for name, override := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newFakeRemote(t)
+			r.put("files/x", good)
+			m := map[string]any{"schema_version": 1, "id": packID, "game_id": "valheim", "name": "p", "version": "1"}
+			for k, v := range override {
+				m[k] = v
+			}
+			pack := r.publish(t, packID, m)
+			g := newFakeGame(t, false)
+			err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil)
+			if !errors.Is(err, ErrInvalidPack) {
+				t.Errorf("err = %v, want ErrInvalidPack", err)
+			}
+		})
+	}
+}
+
 func TestEngine_Install_unknownFileAtTarget_returnsLeftoversError(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))

@@ -19,6 +19,7 @@ const maxLeftoversInMessage = 8
 var messageRules = []func(error) (string, bool){
 	nothingToRemoveMessage,
 	updateRequiredMessage,
+	invalidPackMessage,
 	permissionMessage,
 	prefixNotFoundMessage,
 	leftoversMessage,
@@ -95,6 +96,10 @@ func updateRequiredMessage(err error) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf("Please update %s (%s: %s).", config.AppName, updateErr.Doc, updateErr.Reason), true
+}
+
+func invalidPackMessage(err error) (string, bool) {
+	return "This modpack is broken. Please tell the pack's author.", errors.Is(err, engine.ErrInvalidPack)
 }
 
 func permissionMessage(err error) (string, bool) {

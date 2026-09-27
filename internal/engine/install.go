@@ -150,7 +150,7 @@ func (e *Engine) fetchCheckedManifest(ctx context.Context, req InstallRequest, e
 		return nil, err
 	}
 	if manifest.ID != req.Pack.ID || manifest.GameID != req.Game.GameID {
-		return nil, fmt.Errorf("manifest mismatch: got pack %q game %q, want %q %q", manifest.ID, manifest.GameID, req.Pack.ID, req.Game.GameID)
+		return nil, fmt.Errorf("%w: manifest mismatch: got pack %q game %q, want %q %q", ErrInvalidPack, manifest.ID, manifest.GameID, req.Pack.ID, req.Game.GameID)
 	}
 	step(emit, "Checking pack…")
 	ownedDirs, err := cleanRelPaths("owned_dirs", root, manifest.OwnedDirs)

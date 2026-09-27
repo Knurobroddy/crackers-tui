@@ -84,7 +84,7 @@ func buildPlan(root string, entries []remote.FileEntry, downloaded []string) (*p
 	}
 	if err := p.checkConflicts(); err != nil {
 		p.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPack, err)
 	}
 	return p, nil
 }
