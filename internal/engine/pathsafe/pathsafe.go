@@ -1,5 +1,5 @@
 // Package pathsafe validates relative paths from manifests and zip archives
-// before anything is written (ADR §5.2).
+// before anything is written.
 //
 // The rules are the same on every OS: a backslash is treated as a separator,
 // and absolute paths, volume names (including drive-relative "C:x" and UNC
