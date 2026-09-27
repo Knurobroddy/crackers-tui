@@ -90,7 +90,7 @@ func run() (code int) {
 	err = tui.Run(tui.Deps{
 		AppVersion: version,
 		Client:     client,
-		Engine:     engine.New(client, version, log),
+		Engine:     engine.New(client, version, engine.OSFiles{}),
 		Detector:   detector,
 		Updater:    updater,
 		LogPath:    config.LogPath(),

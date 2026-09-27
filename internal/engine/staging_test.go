@@ -34,27 +34,26 @@ func assertNoStaging(t *testing.T, root string) {
 	}
 }
 
-func TestFailedReinstallOrSwitchKeepsOldPack(t *testing.T) {
+func TestEngine_Install_reinstallOrSwitchFails_keepsOldPack(t *testing.T) {
+	markerWrite := faultyFiles{op: "rename", pathMatch: config.MarkerFileName + config.TmpSuffix, nth: 1}
 	for _, tc := range []struct {
 		name       string
 		switchPack bool
-		stage      string
-		n          int
+		files      faultyFiles
 		hooksLost  bool // the old pack's game settings were already undone
 	}{
-		{"reinstall-file-0", false, "file", 0, false},
-		{"reinstall-file-3", false, "file", 3, false},
-		{"reinstall-hook-0", false, "hook", 0, true},
-		{"reinstall-marker", false, "marker", 0, true},
-		{"switch-file-0", true, "file", 0, false},
-		{"switch-marker", true, "marker", 0, true},
+		{"reinstall-file-1", false, faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 1}, false},
+		{"reinstall-file-4", false, faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 4}, false},
+		{"reinstall-marker", false, markerWrite, true},
+		{"switch-file-1", true, faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 1}, false},
+		{"switch-marker", true, markerWrite, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newFakeRemote(t)
 			packA := r.publish(t, packID, defaultManifest(t, r))
 			packB := r.publish(t, "valheim-other", otherPack(t, r))
 			g := newFakeGame(t, true)
-			e := New(r.client(), "0.1.0", nil)
+			e := New(r.client(), "0.1.0", OSFiles{})
 			ctx := context.Background()
 			if err := e.Install(ctx, g.request("linux_proton", packA), nil); err != nil {
 				t.Fatal(err)
@@ -62,19 +61,12 @@ func TestFailedReinstallOrSwitchKeepsOldPack(t *testing.T) {
 			installed := snapshot(t, g.lib)
 			regInstalled, _ := os.ReadFile(g.reg)
 
-			injected := errors.New("injected failure")
-			e.failpoint = func(stage string, n int) error {
-				if stage == tc.stage && n == tc.n {
-					return injected
-				}
-				return nil
-			}
 			next := packA
 			if tc.switchPack {
 				next = packB
 			}
-			err := e.Install(ctx, g.request("linux_proton", next), nil)
-			if !errors.Is(err, injected) {
+			err := New(r.client(), "0.1.0", &tc.files).Install(ctx, g.request("linux_proton", next), nil)
+			if !errors.Is(err, errInjected) {
 				t.Fatalf("err = %v, want injected failure", err)
 			}
 			if got := strings.Contains(err.Error(), "reinstall"); got != tc.hooksLost {
@@ -104,7 +96,7 @@ func TestLeftoversOnSwitchKeepOldPack(t *testing.T) {
 	r.put("files/extra.dll", extra)
 	packB := r.publish(t, "valheim-other", otherPack(t, r, entry("files/extra.dll", extra, "file", "extra.dll", "")))
 	g := newFakeGame(t, false)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 	vanilla := snapshot(t, g.lib)
 	if err := e.Install(ctx, g.request("windows", packA), nil); err != nil {
@@ -155,7 +147,7 @@ func TestUpdateKeepsModifiedConfigs(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, configManifest(r, "1", "mod v1", "other v1"))
 	g := newFakeGame(t, false)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 	vanilla := snapshot(t, g.lib)
 	if err := e.Install(ctx, g.request("windows", pack), nil); err != nil {
@@ -204,7 +196,7 @@ func TestSwitchDoesNotCarryConfigs(t *testing.T) {
 	m["preserve"] = []string{"BepInEx/config"}
 	packB := r.publish(t, "valheim-other", m)
 	g := newFakeGame(t, false)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 	if err := e.Install(ctx, g.request("windows", pack), nil); err != nil {
 		t.Fatal(err)
@@ -217,13 +209,19 @@ func TestSwitchDoesNotCarryConfigs(t *testing.T) {
 	}
 }
 
-func TestInterruptedReinstallRecovers(t *testing.T) {
-	for _, stage := range []string{"file", "staging"} {
-		t.Run(stage, func(t *testing.T) {
+func TestEngine_Install_crashDuringReinstall_nextRemoveRecovers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files faultyFiles
+	}{
+		{"file", faultyFiles{op: "create", pathMatch: config.TmpSuffix, nth: 3, crash: true}},
+		{"staging", faultyFiles{op: "removeall", pathMatch: config.StagingDirName, nth: 1, crash: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			r := newFakeRemote(t)
 			pack := r.publish(t, packID, defaultManifest(t, r))
 			g := newFakeGame(t, false)
-			e := New(r.client(), "0.1.0", nil)
+			e := New(r.client(), "0.1.0", OSFiles{})
 			ctx := context.Background()
 			vanilla := snapshot(t, g.lib)
 			if err := e.Install(ctx, g.request("windows", pack), nil); err != nil {
@@ -231,21 +229,14 @@ func TestInterruptedReinstallRecovers(t *testing.T) {
 			}
 
 			// Simulate a crash: the panic skips rollback and cleanup.
-			e.failpoint = func(s string, n int) error {
-				if s == stage && (n == 2 || stage == "staging") {
-					panic("crash")
-				}
-				return nil
-			}
 			func() {
 				defer func() { recover() }()
-				e.Install(ctx, g.request("windows", pack), nil)
+				New(r.client(), "0.1.0", &tc.files).Install(ctx, g.request("windows", pack), nil)
 				t.Fatal("no crash")
 			}()
 			if _, err := os.Lstat(filepath.Join(g.root, config.StagingDirName)); err != nil {
 				t.Fatalf("expected a staging folder after the crash: %v", err)
 			}
-			e.failpoint = nil
 
 			// Remove first recovers (or discards) the staged pack, then removes it.
 			if err := e.Remove(ctx, g.root, nil); err != nil {

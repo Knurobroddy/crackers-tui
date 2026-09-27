@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,10 +69,10 @@ func (e *Engine) removeLeftovers(root string, paths []string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.RemoveAll(abs); err != nil {
+		if err := e.files.RemoveAll(abs); err != nil {
 			return fsErr(abs, err)
 		}
-		e.log.Info("deleted leftover", "path", abs)
+		slog.Info("deleted leftover", "path", abs)
 	}
 	return nil
 }
@@ -84,7 +85,7 @@ func (e *Engine) removeLeftovers(root string, paths []string) error {
 func (e *Engine) CleanLeftovers(ctx context.Context, req InstallRequest, progress ProgressFunc) (removed []string, err error) {
 	emit := emitter(progress)
 	root := req.Game.RootDir
-	log := e.log.With("pack", req.Pack.ID, "root", root)
+	log := slog.With("pack", req.Pack.ID, "root", root)
 	log.Info("leftover cleanup started")
 	defer func() {
 		if err != nil {
@@ -96,7 +97,7 @@ func (e *Engine) CleanLeftovers(ctx context.Context, req InstallRequest, progres
 	if _, err := os.Lstat(MarkerPath(root)); err == nil {
 		return nil, fmt.Errorf("a pack is installed in %s; use Remove pack instead", root)
 	}
-	pr, err := e.prepare(ctx, req, emit, log, false)
+	pr, err := e.prepare(ctx, req, emit, false)
 	if err != nil {
 		return nil, err
 	}

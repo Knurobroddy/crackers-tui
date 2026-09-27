@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Knurobroddy/crackers-tui/internal/config"
-	"github.com/Knurobroddy/crackers-tui/internal/fsutil"
 	"github.com/Knurobroddy/crackers-tui/internal/hooks"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
 )
@@ -56,13 +55,13 @@ func ReadMarker(root string) (*Marker, error) {
 }
 
 // writeMarker writes the marker via a tmp file and rename.
-func writeMarker(root string, m *Marker) error {
+func writeMarker(files FileWriter, root string, m *Marker) error {
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
 	p := MarkerPath(root)
-	return fsErr(p, fsutil.WriteAtomic(p, append(b, '\n'), 0o644))
+	return fsErr(p, writeAtomic(files, p, append(b, '\n'), 0o644))
 }
 
 func nonNil(s []string) []string {

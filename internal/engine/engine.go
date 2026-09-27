@@ -3,13 +3,12 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
-	"github.com/Knurobroddy/crackers-tui/internal/logx"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
 )
 
@@ -39,24 +38,23 @@ type ProgressFunc func(Event)
 // ErrNothingToRemove is returned by Remove when there is no marker.
 var ErrNothingToRemove = errors.New("nothing to remove: no pack is installed")
 
-// Engine performs installs and removals.
-type Engine struct {
-	client     *remote.Client
-	appVersion string
-	log        *slog.Logger
-
-	// failpoint, if set, is called before each write stage ("file" with the
-	// 0-based file index, "hook", "marker", and "staging" after the marker was
-	// written, before the previous pack's staged files are deleted); a
-	// returned error is treated as a failure at that point. Tests use it to
-	// exercise rollback and (by panicking) interrupted installs.
-	failpoint func(stage string, n int) error
+// Source is where the engine gets pack manifests and files from.
+type Source interface {
+	FetchManifest(ctx context.Context, ref string) (*remote.Manifest, string, error)
+	ManifestHash(ctx context.Context, ref string) (string, error)
+	Download(ctx context.Context, entry remote.FileEntry, dst string, progress remote.ProgressFunc) error
 }
 
-// New returns an engine.
-func New(client *remote.Client, appVersion string, log *slog.Logger) *Engine {
-	log = logx.OrDiscard(log)
-	return &Engine{client: client, appVersion: appVersion, log: log}
+// Engine performs installs and removals.
+type Engine struct {
+	source     Source
+	appVersion string
+	files      FileWriter
+}
+
+// New returns an engine that installs from source and writes through files.
+func New(source Source, appVersion string, files FileWriter) *Engine {
+	return &Engine{source: source, appVersion: appVersion, files: files}
 }
 
 // InstallRequest describes what to install where.
@@ -67,13 +65,6 @@ type InstallRequest struct {
 	// CleanLeftovers deletes leftovers (see LeftoversError) before writing
 	// instead of failing. The UI sets it only after the user confirmed.
 	CleanLeftovers bool
-}
-
-func (e *Engine) fail(stage string, n int) error {
-	if e.failpoint == nil {
-		return nil
-	}
-	return e.failpoint(stage, n)
 }
 
 // PermissionError is returned when the OS refuses a write.

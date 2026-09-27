@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 	"github.com/Knurobroddy/crackers-tui/internal/engine/pathsafe"
-	"github.com/Knurobroddy/crackers-tui/internal/fsutil"
 )
 
 // staging is the previously installed pack, moved aside while another install
@@ -22,9 +22,10 @@ import (
 // <root>/<StagingDirName>/files keeping their relative paths; a copy of its
 // marker lies next to them so an interrupted install can be recovered.
 type staging struct {
-	root string
-	dir  string
-	old  *Marker
+	root  string
+	dir   string
+	old   *Marker
+	files FileWriter
 }
 
 func stagingDir(root string) string {
@@ -48,12 +49,12 @@ func (e *Engine) stage(root string) (_ *staging, err error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &staging{root: root, dir: stagingDir(root), old: old}
-	if err := os.MkdirAll(filepath.Join(s.dir, "files"), 0o755); err != nil {
+	s := &staging{root: root, dir: stagingDir(root), old: old, files: e.files}
+	if err := e.files.MkdirAll(filepath.Join(s.dir, "files"), 0o755); err != nil {
 		return nil, fsErr(s.dir, err)
 	}
-	if err := os.WriteFile(filepath.Join(s.dir, config.MarkerFileName), raw, 0o644); err != nil {
-		os.RemoveAll(s.dir)
+	if err := writeFile(e.files, filepath.Join(s.dir, config.MarkerFileName), raw, 0o644); err != nil {
+		_ = e.files.RemoveAll(s.dir)
 		return nil, fsErr(s.dir, err)
 	}
 	defer func() {
@@ -75,7 +76,7 @@ func (e *Engine) stage(root string) (_ *staging, err error) {
 			return nil, err
 		}
 	}
-	e.log.Info("moved the installed pack aside", "pack", old.PackID, "dir", s.dir)
+	slog.Info("moved the installed pack aside", "pack", old.PackID, "dir", s.dir)
 	return s, nil
 }
 
@@ -92,10 +93,10 @@ func (s *staging) move(rel string) error {
 		return fsErr(src, err)
 	}
 	dst := s.path(rel)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := s.files.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fsErr(dst, err)
 	}
-	if err := os.Rename(src, dst); err != nil {
+	if err := s.files.Rename(src, dst); err != nil {
 		return fsErr(src, err)
 	}
 	return nil
@@ -115,52 +116,52 @@ func (s *staging) moveEmptyDir(rel string) error {
 	if err != nil {
 		return fsErr(src, err)
 	}
-	if err := os.MkdirAll(s.path(rel), 0o755); err != nil {
+	if err := s.files.MkdirAll(s.path(rel), 0o755); err != nil {
 		return fsErr(s.dir, err)
 	}
-	return fsErr(src, os.Remove(src))
+	return fsErr(src, s.files.Remove(src))
 }
 
 // restore moves everything back into the game dir and deletes the staging
 // folder.
 func (s *staging) restore() error {
-	return restoreStaged(s.dir, s.root)
+	return restoreStaged(s.files, s.dir, s.root)
 }
 
 // discard deletes the staging folder after a successful install.
 func (s *staging) discard() error {
-	return fsErr(s.dir, os.RemoveAll(s.dir))
+	return fsErr(s.dir, s.files.RemoveAll(s.dir))
 }
 
 // restoreStaged moves every staged file back to its place below root,
 // replacing whatever is there, and recreates staged folders. The staging
 // folder is deleted only if everything was moved back.
-func restoreStaged(dir, root string) error {
-	files := filepath.Join(dir, "files")
+func restoreStaged(files FileWriter, dir, root string) error {
+	filesDir := filepath.Join(dir, "files")
 	var errs []error
-	err := filepath.WalkDir(files, func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(filesDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			if p == files && os.IsNotExist(err) {
+			if p == filesDir && os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-		rel, err := filepath.Rel(files, p)
+		rel, err := filepath.Rel(filesDir, p)
 		if err != nil || rel == "." {
 			return err
 		}
 		dst := filepath.Join(root, rel)
 		if d.IsDir() {
-			if err := os.MkdirAll(dst, 0o755); err != nil {
+			if err := files.MkdirAll(dst, 0o755); err != nil {
 				errs = append(errs, fsErr(dst, err))
 			}
 			return nil
 		}
-		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		if err := files.Remove(dst); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, fsErr(dst, err))
 			return nil
 		}
-		if err := os.Rename(p, dst); err != nil {
+		if err := files.Rename(p, dst); err != nil {
 			errs = append(errs, fsErr(dst, err))
 		}
 		return nil
@@ -171,7 +172,7 @@ func restoreStaged(dir, root string) error {
 	if len(errs) > 0 {
 		return fmt.Errorf("some files are still in %s:\n%w", dir, errors.Join(errs...))
 	}
-	return fsErr(dir, os.RemoveAll(dir))
+	return fsErr(dir, files.RemoveAll(dir))
 }
 
 // recoverStaging cleans up after an install that was interrupted (e.g. the
@@ -190,11 +191,11 @@ func (e *Engine) recoverStaging(root string) error {
 	staged, _ := os.ReadFile(filepath.Join(dir, config.MarkerFileName))
 	current, _ := os.ReadFile(MarkerPath(root))
 	if staged != nil && bytes.Equal(staged, current) {
-		e.log.Warn("interrupted install: moving the previous pack back", "dir", dir)
-		return restoreStaged(dir, root)
+		slog.Warn("interrupted install: moving the previous pack back", "dir", dir)
+		return restoreStaged(e.files, dir, root)
 	}
-	e.log.Warn("interrupted install: deleting the previous pack's staged files", "dir", dir)
-	return fsErr(dir, os.RemoveAll(dir))
+	slog.Warn("interrupted install: deleting the previous pack's staged files", "dir", dir)
+	return fsErr(dir, e.files.RemoveAll(dir))
 }
 
 // keepUserFiles copies staged files of the same pack that lie below one of
@@ -245,13 +246,13 @@ func (e *Engine) keepUserFiles(s *staging, preserve []string, j *journal) error 
 					return err
 				}
 			}
-			if err := fsutil.WriteAtomic(dst, data, fi.Mode().Perm()); err != nil {
+			if err := writeAtomic(e.files, dst, data, fi.Mode().Perm()); err != nil {
 				return fsErr(dst, err)
 			}
 			if !shipped {
 				j.files = append(j.files, rel)
 			}
-			e.log.Info("kept user file", "path", dst, "replaced_pack_version", shipped)
+			slog.Info("kept user file", "path", dst, "replaced_pack_version", shipped)
 			return nil
 		})
 		if err != nil {

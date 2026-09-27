@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +20,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Knurobroddy/crackers-tui/internal/config"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/hooks"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
@@ -265,7 +265,7 @@ func TestInstallAndRemoveRestoresExactTree(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g := newFakeGame(t, false)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 	before := snapshot(t, g.lib)
 
@@ -350,7 +350,7 @@ func TestInstallWithProtonHookAndRemove(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g := newFakeGame(t, true)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 	regBefore, _ := os.ReadFile(g.reg)
 	before := snapshot(t, g.root)
@@ -380,30 +380,25 @@ func TestInstallWithProtonHookAndRemove(t *testing.T) {
 	}
 }
 
-func TestRollbackOnInjectedFailure(t *testing.T) {
+func TestEngine_Install_writeFails_rollsBackToVanilla(t *testing.T) {
 	for _, tc := range []struct {
-		stage string
-		n     int
+		name  string
+		files faultyFiles
 	}{
-		{"file", 0}, {"file", 3}, {"hook", 0}, {"marker", 0},
+		{"file-1", faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 1}},
+		{"file-4", faultyFiles{op: "rename", pathMatch: config.TmpSuffix, nth: 4}},
+		{"marker", faultyFiles{op: "rename", pathMatch: config.MarkerFileName + config.TmpSuffix, nth: 1}},
 	} {
-		t.Run(fmt.Sprintf("%s-%d", tc.stage, tc.n), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			r := newFakeRemote(t)
 			pack := r.publish(t, packID, defaultManifest(t, r))
 			g := newFakeGame(t, true)
-			e := New(r.client(), "0.1.0", nil)
-			injected := errors.New("injected failure")
-			e.failpoint = func(stage string, n int) error {
-				if stage == tc.stage && n == tc.n {
-					return injected
-				}
-				return nil
-			}
+			e := New(r.client(), "0.1.0", &tc.files)
 			before := snapshot(t, g.lib)
 			regBefore, _ := os.ReadFile(g.reg)
 
 			err := e.Install(context.Background(), g.request("linux_proton", pack), nil)
-			if !errors.Is(err, injected) {
+			if !errors.Is(err, errInjected) {
 				t.Fatalf("err = %v, want injected failure", err)
 			}
 			after := snapshot(t, g.lib)
@@ -428,7 +423,7 @@ func TestHashMismatchAbortsBeforeWriting(t *testing.T) {
 	g := newFakeGame(t, false)
 	before := snapshot(t, g.lib)
 
-	err := New(r.client(), "0.1.0", nil).Install(context.Background(), g.request("windows", pack), nil)
+	err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil)
 	if err == nil || !strings.Contains(err.Error(), "SomeMod.dll") {
 		t.Fatalf("err = %v, want mismatch naming SomeMod.dll", err)
 	}
@@ -454,7 +449,7 @@ func TestUnsafeArchivesRejectedBeforeWriting(t *testing.T) {
 			})
 			g := newFakeGame(t, false)
 			before := snapshot(t, g.lib)
-			err := New(r.client(), "0.1.0", nil).Install(context.Background(), g.request("windows", pack), nil)
+			err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil)
 			if err == nil {
 				t.Fatal("unsafe archive accepted")
 			}
@@ -489,7 +484,7 @@ func TestUnsafeManifestRejected(t *testing.T) {
 			pack := r.publish(t, packID, m)
 			g := newFakeGame(t, false)
 			before := snapshot(t, g.lib)
-			err := New(r.client(), "0.1.0", nil).Install(context.Background(), g.request("windows", pack), nil)
+			err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil)
 			if err == nil {
 				t.Fatal("unsafe manifest accepted")
 			}
@@ -505,7 +500,7 @@ func TestExistingFileAborts(t *testing.T) {
 	g := newFakeGame(t, false)
 	os.WriteFile(filepath.Join(g.root, "winhttp.dll"), []byte("someone else's"), 0o644)
 	before := snapshot(t, g.lib)
-	err := New(r.client(), "0.1.0", nil).Install(context.Background(), g.request("windows", pack), nil)
+	err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil)
 	var lo *LeftoversError
 	if !errors.As(err, &lo) || !reflect.DeepEqual(lo.Paths, []string{"winhttp.dll"}) {
 		t.Fatalf("err = %v, want LeftoversError for winhttp.dll", err)
@@ -538,7 +533,7 @@ func TestLeftoversCleanedOnConfirmedInstall(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g, _ := leftoverGame(t)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 
 	err := e.Install(ctx, g.request("windows", pack), nil)
@@ -579,7 +574,7 @@ func TestCleanLeftoversStandalone(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g, vanilla := leftoverGame(t)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 
 	removed, err := e.CleanLeftovers(ctx, g.request("windows", pack), nil)
@@ -611,7 +606,7 @@ func TestMissingPrefixAborts(t *testing.T) {
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g := newFakeGame(t, false) // no compatdata
 	before := snapshot(t, g.lib)
-	err := New(r.client(), "0.1.0", nil).Install(context.Background(), g.request("linux_proton", pack), nil)
+	err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("linux_proton", pack), nil)
 	if !errors.Is(err, hooks.ErrPrefixNotFound) {
 		t.Fatalf("err = %v, want ErrPrefixNotFound", err)
 	}
@@ -629,7 +624,7 @@ func TestSwitchPackAndStatus(t *testing.T) {
 		"files":      map[string]any{"common": []any{entry("files/other.dll", other, "file", "BepInEx/plugins/other.dll", "")}},
 	})
 	g := newFakeGame(t, false)
-	e := New(r.client(), "0.1.0", nil)
+	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
 	before := snapshot(t, g.lib)
 
@@ -677,7 +672,7 @@ func TestSwitchPackAndStatus(t *testing.T) {
 func TestCorruptMarker(t *testing.T) {
 	g := newFakeGame(t, false)
 	os.WriteFile(MarkerPath(g.root), []byte("{not json"), 0o644)
-	e := New(nil, "0.1.0", nil)
+	e := New(nil, "0.1.0", OSFiles{})
 	if st := e.Status(context.Background(), g.root, &remote.Index{}); st.State != Unknown || st.Err == nil {
 		t.Errorf("status = %+v", st)
 	}
@@ -694,10 +689,10 @@ func TestMarkerPathsValidatedOnRemove(t *testing.T) {
 	outside := filepath.Join(g.lib, "outside.txt")
 	os.WriteFile(outside, []byte("keep"), 0o644)
 	mk := &Marker{SchemaVersion: 1, PackID: "x", Files: []string{"../../outside.txt"}, OwnedDirs: []string{"../.."}}
-	if err := writeMarker(g.root, mk); err != nil {
+	if err := writeMarker(OSFiles{}, g.root, mk); err != nil {
 		t.Fatal(err)
 	}
-	if err := New(nil, "0.1.0", nil).Remove(context.Background(), g.root, nil); err == nil {
+	if err := New(nil, "0.1.0", OSFiles{}).Remove(context.Background(), g.root, nil); err == nil {
 		t.Fatal("tampered marker accepted")
 	}
 	if _, err := os.Stat(outside); err != nil {

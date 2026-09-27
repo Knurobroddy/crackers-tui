@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
@@ -63,9 +64,9 @@ func (e *Engine) Status(ctx context.Context, root string, ix *remote.Index) Stat
 	if !ok {
 		return Status{State: NotOffered, Marker: mk}
 	}
-	hash, err := e.client.ManifestHash(ctx, ref.Manifest)
+	hash, err := e.source.ManifestHash(ctx, ref.Manifest)
 	if err != nil {
-		e.log.Warn("could not check for pack update", "pack", mk.PackID, "err", err)
+		slog.Warn("could not check for pack update", "pack", mk.PackID, "err", err)
 		return Status{State: Installed, Marker: mk, Pack: ref, CheckErr: err}
 	}
 	if hash != mk.ManifestSHA256 {

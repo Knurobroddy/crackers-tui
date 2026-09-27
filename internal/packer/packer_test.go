@@ -153,7 +153,7 @@ func TestBuildThenInstallAndRemove(t *testing.T) {
 	}
 	root := filepath.Join(t.TempDir(), "Valheim")
 	write(t, filepath.Join(root, "valheim.exe"), "vanilla")
-	eng := engine.New(c, "0.1.0", nil)
+	eng := engine.New(c, "0.1.0", engine.OSFiles{})
 	req := engine.InstallRequest{Game: detect.Result{GameID: "valheim", BuildID: "windows", RootDir: root}, FilesKey: "windows", Pack: ref}
 	if err := eng.Install(ctx, req, nil); err != nil {
 		t.Fatal(err)

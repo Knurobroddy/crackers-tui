@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -26,7 +27,7 @@ func (e *Engine) Remove(ctx context.Context, root string, progress ProgressFunc)
 		}
 		return err
 	}
-	log := e.log.With("pack", mk.PackID, "root", root)
+	log := slog.With("pack", mk.PackID, "root", root)
 	log.Info("remove started")
 	defer func() {
 		if err != nil {
@@ -44,7 +45,7 @@ func (e *Engine) Remove(ctx context.Context, root string, progress ProgressFunc)
 			errs = append(errs, fmt.Errorf("marker: %w", err))
 			continue
 		}
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		if err := e.files.Remove(p); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, fsErr(p, err))
 			continue
 		}
@@ -56,7 +57,7 @@ func (e *Engine) Remove(ctx context.Context, root string, progress ProgressFunc)
 			errs = append(errs, fmt.Errorf("marker: %w", err))
 			continue
 		}
-		if err := os.RemoveAll(p); err != nil {
+		if err := e.files.RemoveAll(p); err != nil {
 			errs = append(errs, fsErr(p, err))
 			continue
 		}
@@ -73,14 +74,14 @@ func (e *Engine) Remove(ctx context.Context, root string, progress ProgressFunc)
 			errs = append(errs, fmt.Errorf("marker: %w", err))
 			continue
 		}
-		if err := removeIfEmpty(p); err != nil {
+		if err := removeIfEmpty(e.files, p); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("remove incomplete; the marker was kept so you can retry:\n%w", errors.Join(errs...))
 	}
-	if err := os.Remove(MarkerPath(root)); err != nil && !os.IsNotExist(err) {
+	if err := e.files.Remove(MarkerPath(root)); err != nil && !os.IsNotExist(err) {
 		return fsErr(MarkerPath(root), err)
 	}
 	return nil
