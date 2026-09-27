@@ -32,6 +32,8 @@ const (
 	// have inserted between two runes of a long path, once box-drawing
 	// decoration and per-line whitespace have already been stripped.
 	wrapBoundary = `\n?`
+
+	gameRootPlaceholder = "<GAME_ROOT>"
 )
 
 // boxDrawingRegexp matches the panel's box-drawing border (lipgloss's
@@ -39,6 +41,13 @@ const (
 // Drawing and Block Elements ranges — so normalizePaths can reduce a screen
 // to its text content.
 var boxDrawingRegexp = regexp.MustCompile(`[\x{2500}-\x{259F}]`)
+
+// Word-wrap breaks the panel may put right before or right after a replaced
+// path; see joinPlaceholderWraps.
+var (
+	breakBeforePlaceholderRegexp = regexp.MustCompile(`\n` + gameRootPlaceholder)
+	breakAfterPlaceholderRegexp  = regexp.MustCompile(gameRootPlaceholder + `\n\.`)
+)
 
 func TestMain(m *testing.M) {
 	lipgloss.SetColorProfile(termenv.Ascii) // golden files without ANSI colors
@@ -174,7 +183,8 @@ func installFirst(t *testing.T, w *fakeworld.World) {
 // normalizePaths reduces view to its text content — stripping box-drawing
 // decoration, trimming each line and dropping blank ones — then replaces
 // the run-specific temp paths with a fixed placeholder, tolerating a wrap
-// between any two of a path's runes. Normalizing to text content, rather
+// between any two of a path's runes, right before the path or right before
+// the full stop after it. Normalizing to text content, rather
 // than matching the raw bordered layout, keeps the golden files independent
 // of the panel's row count: whether w.GameRoot is short enough to fit one
 // line (e.g. a CI runner's shorter temp dir) or long enough to hard-wrap (a
@@ -184,7 +194,7 @@ func normalizePaths(view []byte, w *fakeworld.World) []byte {
 	text := stripDecoration(string(view))
 	text = replaceWrappedPath(text, w.GameRoot)
 	text = replaceWrappedPath(text, filepath.ToSlash(w.GameRoot))
-	return []byte(dropBlankLines(text))
+	return []byte(joinPlaceholderWraps(dropBlankLines(text)))
 }
 
 // stripDecoration removes box-drawing characters from each line, then trims
@@ -198,7 +208,7 @@ func stripDecoration(view string) string {
 }
 
 // replaceWrappedPath replaces every occurrence of path in text with
-// "<GAME_ROOT>", tolerating wrapBoundary between any two of its runes and a
+// gameRootPlaceholder, tolerating wrapBoundary between any two of its runes and a
 // space rune of path itself being consumed by a word-wrap break (the panel
 // wraps on whitespace first, and a path can contain one, e.g. "Gry Steam ł").
 func replaceWrappedPath(text, path string) string {
@@ -212,7 +222,17 @@ func replaceWrappedPath(text, path string) string {
 		}
 		pattern.WriteString(runePattern(r))
 	}
-	return regexp.MustCompile(pattern.String()).ReplaceAllString(text, "<GAME_ROOT>")
+	return regexp.MustCompile(pattern.String()).ReplaceAllString(text, gameRootPlaceholder)
+}
+
+// joinPlaceholderWraps undoes a word-wrap break the panel put right before
+// the replaced path (in place of the space after "into" or "from") or right
+// before the full stop after it; whether such a break exists depends only on
+// the temp dir's length. In every screen the flows compare, the path follows
+// text on the same line, so a line break before the placeholder is a wrap.
+func joinPlaceholderWraps(text string) string {
+	text = breakBeforePlaceholderRegexp.ReplaceAllString(text, " "+gameRootPlaceholder)
+	return breakAfterPlaceholderRegexp.ReplaceAllString(text, gameRootPlaceholder+".")
 }
 
 // runePattern matches r literally, except a space, which the panel's
@@ -241,7 +261,8 @@ func dropBlankLines(text string) string {
 // dir), a long path split mid-token across two lines (as on a Windows dev
 // machine's deep temp dir), and a long path split exactly on a space the
 // path itself contains (lipgloss word-wraps on whitespace first, and "Gry
-// Steam ł" has one) must all normalize to the exact same text.
+// Steam ł" has one), or a path moved whole to the next line, or followed by
+// a full stop that wrapped, must all normalize to the exact same text.
 func TestNormalizePaths_shortAndWrappedPath_sameOutput(t *testing.T) {
 	short := &fakeworld.World{GameRoot: `C:\g\Valheim`}
 	long := &fakeworld.World{
@@ -263,6 +284,10 @@ func TestNormalizePaths_shortAndWrappedPath_sameOutput(t *testing.T) {
 			"│  " + string(runes[split:]) + ".  │\n"},
 		{"wrapped on the path's own space", spaceWrap, "│  Installed Test pack into " + spaceWrap.GameRoot[:spaceIdx] + "│\n" +
 			"│  " + spaceWrap.GameRoot[spaceIdx+1:] + ".  │\n"},
+		{"wrapped before path", short, "│  Installed Test pack into  │\n" +
+			"│  " + short.GameRoot + ".  │\n"},
+		{"wrapped before full stop", short, "│  Installed Test pack into " + short.GameRoot + "│\n" +
+			"│  .  │\n"},
 	} {
 		if got := normalizePaths([]byte(tc.view), tc.w); !bytes.Equal(got, want) {
 			t.Errorf("%s: normalizePaths() = %q, want %q", tc.name, got, want)
