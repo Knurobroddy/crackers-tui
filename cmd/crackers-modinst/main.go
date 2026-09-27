@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/Knurobroddy/crackers-tui/internal/app"
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/detect/steam"
@@ -87,14 +88,16 @@ func run() (code int) {
 		}
 	}
 
+	packEngine := engine.New(client, version, engine.OSFiles{})
+	appDeps := app.Deps{Catalog: client, Detector: detector, Installer: packEngine, Status: packEngine}
+	if updater != nil {
+		// A typed nil *update.Updater would make app see updates as enabled.
+		appDeps.Updater = updater
+	}
 	err = tui.Run(tui.Deps{
 		AppVersion: version,
-		Client:     client,
-		Engine:     engine.New(client, version, engine.OSFiles{}),
-		Detector:   detector,
-		Updater:    updater,
+		App:        app.New(appDeps),
 		LogPath:    config.LogPath(),
-		Log:        log,
 	})
 	if err != nil {
 		return fatal(log, err, interactive)

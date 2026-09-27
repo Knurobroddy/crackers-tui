@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Knurobroddy/crackers-tui/internal/app"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
@@ -14,14 +16,15 @@ import (
 )
 
 var (
-	testGames = &remote.Games{Games: []detect.GameDef{{ID: "valheim", Name: "Valheim", NotFoundHint: "Use Proton."}}}
-	testIndex = &remote.Index{Packs: []remote.PackRef{{ID: "p", GameID: "valheim", Name: "P"}}}
+	testGames   = &remote.Games{Games: []detect.GameDef{{ID: "valheim", Name: "Valheim", NotFoundHint: "Use Proton."}}}
+	testIndex   = &remote.Index{Packs: []remote.PackRef{{ID: "p", GameID: "valheim", Name: "P"}}}
+	testLibrary = &app.Library{Games: testGames, Index: testIndex}
 )
 
 // startup feeds the startup messages in order and returns the model.
 func startup(t *testing.T, withUpdater bool, msgs ...tea.Msg) *model {
 	t.Helper()
-	m := newModel(Deps{AppVersion: "0.1.0", LogPath: "/tmp/x.log"})
+	m := newModel(Deps{AppVersion: "0.1.0", App: app.New(app.Deps{}), LogPath: "/tmp/x.log"})
 	m.updateDone = !withUpdater
 	for _, msg := range msgs {
 		m.Update(msg)
@@ -29,13 +32,13 @@ func startup(t *testing.T, withUpdater bool, msgs ...tea.Msg) *model {
 	return m
 }
 
-func TestStartupWaitsForUpdateCheck(t *testing.T) {
+func TestModel_Update_libraryNeedsUpdateWhileCheckRuns_waitsThenPromptsForcedUpdate(t *testing.T) {
 	m := startup(t, true, remoteLoadedMsg{err: &remote.UpdateRequiredError{Doc: "index.json", Reason: "x"}})
-	if m.screen != scrLoading {
+	if m.screen != screenLoading {
 		t.Fatalf("screen = %v, want loading while the update check runs", m.screen)
 	}
-	m.Update(updateCheckedMsg{rel: &update.Release{Version: "9.0.0"}})
-	if m.screen != scrUpdatePrompt {
+	m.Update(updateCheckedMsg{release: &update.Release{Version: "9.0.0"}})
+	if m.screen != screenUpdatePrompt {
 		t.Fatalf("screen = %v, want update prompt", m.screen)
 	}
 	if !strings.Contains(m.View(), "Update Crackers Modinst to v9.0.0?") || !strings.Contains(m.View(), "Choosing No quits") {
@@ -43,41 +46,41 @@ func TestStartupWaitsForUpdateCheck(t *testing.T) {
 	}
 }
 
-func TestForcedUpdateWithoutRelease(t *testing.T) {
+func TestModel_Update_forcedUpdateWithoutRelease_showsUpdateAdvice(t *testing.T) {
 	m := startup(t, true,
 		remoteLoadedMsg{err: &remote.UpdateRequiredError{Doc: "games.json", Reason: "requires version 9.0.0 or newer"}},
 		updateCheckedMsg{})
-	if m.screen != scrError || !strings.Contains(m.View(), "app update required") {
+	if m.screen != screenError || !strings.Contains(m.View(), "Please update Crackers Modinst") {
 		t.Fatalf("screen = %v, view:\n%s", m.screen, m.View())
 	}
 }
 
-func TestRemoteErrorShowsRetry(t *testing.T) {
-	m := startup(t, false, remoteLoadedMsg{err: errTest("connection refused")})
+func TestModel_Update_libraryLoadFails_showsErrorWithRetryAndLogPath(t *testing.T) {
+	m := startup(t, false, remoteLoadedMsg{err: errors.New("load games: connection refused")})
 	v := m.View()
-	if m.screen != scrError || !strings.Contains(v, "connection refused") || !strings.Contains(v, "Retry") || !strings.Contains(v, "/tmp/x.log") {
+	if m.screen != screenError || !strings.Contains(v, "connection refused") || !strings.Contains(v, "Retry") || !strings.Contains(v, "/tmp/x.log") {
 		t.Fatalf("screen = %v, view:\n%s", m.screen, v)
 	}
 }
 
-func TestOptionalUpdatePromptThenMenu(t *testing.T) {
-	m := startup(t, true, updateCheckedMsg{rel: &update.Release{Version: "0.2.0"}})
-	m.games, m.index, m.remoteDone = testGames, testIndex, true
-	m.Update(detectedMsg{})
-	if m.screen != scrUpdatePrompt || strings.Contains(m.View(), "Choosing No quits") {
+func TestModel_Update_optionalUpdateDeclined_opensMainMenu(t *testing.T) {
+	m := startup(t, true, updateCheckedMsg{release: &update.Release{Version: "0.2.0"}})
+	m.library, m.remoteDone = testLibrary, true
+	m.Update(gamesDetectedMsg{})
+	if m.screen != screenUpdatePrompt || strings.Contains(m.View(), "Choosing No quits") {
 		t.Fatalf("screen = %v, view:\n%s", m.screen, m.View())
 	}
 	m.updateDeclined = true
 	m.proceed()
-	if m.screen != scrMain {
+	if m.screen != screenMain {
 		t.Fatalf("screen = %v, want main", m.screen)
 	}
 }
 
-func TestNoGamesScreenShowsHints(t *testing.T) {
+func TestModel_View_noGamesDetected_showsSupportedGamesWithHints(t *testing.T) {
 	m := startup(t, false)
-	m.games, m.index, m.remoteDone = testGames, testIndex, true
-	m.Update(detectedMsg{})
+	m.library, m.remoteDone = testLibrary, true
+	m.Update(gamesDetectedMsg{})
 	v := m.View()
 	for _, want := range []string{"No supported games were detected", "Valheim", "Use Proton.", "Detect again", "Quit"} {
 		if !strings.Contains(v, want) {
@@ -86,39 +89,35 @@ func TestNoGamesScreenShowsHints(t *testing.T) {
 	}
 }
 
-func TestQuitBlockedWhileBusy(t *testing.T) {
+func TestModel_Update_quitWhileBusy_showsPleaseWaitThenResult(t *testing.T) {
 	m := startup(t, false)
-	m.screen, m.busy = scrProgress, true
+	m.screen, m.busy = screenProgress, true
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}); cmd != nil {
 		t.Fatal("quit command returned while busy")
 	}
 	if !m.pleaseWait || !strings.Contains(m.View(), "Please wait") {
 		t.Errorf("no please-wait notice:\n%s", m.View())
 	}
-	m.Update(opDoneMsg{err: errTest("boom")})
-	if m.busy || m.screen != scrResult || !strings.Contains(m.View(), "boom") || !strings.Contains(m.View(), "/tmp/x.log") {
+	m.Update(opDoneMsg{err: errors.New("extract archive: boom")})
+	if m.busy || m.screen != screenResult || !strings.Contains(m.View(), "boom") || !strings.Contains(m.View(), "/tmp/x.log") {
 		t.Errorf("result view:\n%s", m.View())
 	}
 }
 
-func TestMainMenuRows(t *testing.T) {
+func TestModel_View_gameDetected_listsGameWithStatus(t *testing.T) {
 	m := startup(t, false)
-	m.games, m.index, m.remoteDone = testGames, testIndex, true
-	m.Update(detectedMsg{rows: []gameRow{{
-		Result: detect.Result{GameID: "valheim", RootDir: "/g"},
-		Game:   testGames.Games[0],
-		Status: engine.Status{State: engine.UpdateAvailable, Marker: &engine.Marker{PackName: "P", PackVersion: "1"}},
+	m.library, m.remoteDone = testLibrary, true
+	m.Update(gamesDetectedMsg{games: []app.Game{{
+		Install: detect.Result{GameID: "valheim", RootDir: "/g"},
+		Def:     testGames.Games[0],
+		Status:  engine.Status{State: engine.UpdateAvailable, Marker: &engine.Marker{PackName: "P", PackVersion: "1"}},
 	}}})
-	if v := m.View(); m.screen != scrMain || !strings.Contains(v, "Valheim — Update available: P 1") {
+	if v := m.View(); m.screen != screenMain || !strings.Contains(v, "Valheim — Update available: P 1") {
 		t.Fatalf("view:\n%s", v)
 	}
 }
 
-type errTest string
-
-func (e errTest) Error() string { return string(e) }
-
-func TestHeaderFitsTerminal(t *testing.T) {
+func TestHeader_terminalSizes_picksLargestBannerThatFits(t *testing.T) {
 	crackers, _ := logoParts()
 	for _, tc := range []struct {
 		w, h      int
@@ -148,12 +147,12 @@ func TestHeaderFitsTerminal(t *testing.T) {
 	}
 }
 
-func TestViewSpansTerminal(t *testing.T) {
+func TestModel_View_terminalSizes_fillsTerminalWithHelpOnLastLine(t *testing.T) {
 	for _, size := range [][2]int{{140, 45}, {120, 30}, {80, 24}} {
 		m := startup(t, false)
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		m.games, m.index, m.remoteDone = testGames, testIndex, true
-		m.Update(detectedMsg{})
+		m.library, m.remoteDone = testLibrary, true
+		m.Update(gamesDetectedMsg{})
 		v := m.View()
 		lines := strings.Split(v, "\n")
 		if len(lines) != size[1] {
@@ -170,30 +169,30 @@ func TestViewSpansTerminal(t *testing.T) {
 	}
 }
 
-func TestLeftoversOfferCleanupThenResult(t *testing.T) {
+func TestModel_Update_installHitsLeftovers_offersCleanupOnceThenShowsResult(t *testing.T) {
 	m := startup(t, false)
-	m.games, m.index, m.remoteDone = testGames, testIndex, true
-	row := gameRow{Result: detect.Result{GameID: "valheim", RootDir: "/g"}, Game: testGames.Games[0], Status: engine.Status{State: engine.NotInstalled}}
-	m.Update(detectedMsg{rows: []gameRow{row}})
-	m.op = pendingOp{kind: actInstall, row: row, pack: testIndex.Packs[0]}
-	m.screen, m.busy = scrProgress, true
+	m.library, m.remoteDone = testLibrary, true
+	game := app.Game{Install: detect.Result{GameID: "valheim", RootDir: "/g"}, Def: testGames.Games[0], Status: engine.Status{State: engine.NotInstalled}}
+	m.Update(gamesDetectedMsg{games: []app.Game{game}})
+	m.op = app.Operation{Kind: app.OpInstall, Game: game, Pack: testIndex.Packs[0]}
+	m.screen, m.busy = screenProgress, true
 
 	m.Update(opDoneMsg{err: &engine.LeftoversError{Root: "/g", Paths: []string{"BepInEx/", "winhttp.dll"}}})
 	v := m.View()
-	if m.screen != scrConfirm || !m.op.clean || !strings.Contains(v, "Leftover mod files found") ||
+	if m.screen != screenConfirm || !m.op.CleanLeftovers || !strings.Contains(v, "Leftover mod files found") ||
 		!strings.Contains(v, "BepInEx/ (folder)") || !strings.Contains(v, "winhttp.dll") {
-		t.Fatalf("screen = %v clean = %v\n%s", m.screen, m.op.clean, v)
+		t.Fatalf("screen = %v clean = %v\n%s", m.screen, m.op.CleanLeftovers, v)
 	}
 
 	// A second leftovers error after the user agreed is shown as a failure, not offered again.
-	m.screen = scrProgress
+	m.screen = screenProgress
 	m.Update(opDoneMsg{err: &engine.LeftoversError{Root: "/g", Paths: []string{"x"}}})
-	if m.screen != scrResult || m.resultOK {
+	if m.screen != screenResult || m.resultOK {
 		t.Errorf("screen = %v", m.screen)
 	}
 
-	m.op = pendingOp{kind: actCleanup, row: row, pack: testIndex.Packs[0]}
-	m.Update(opDoneMsg{removed: []string{"BepInEx/", "winhttp.dll"}})
+	m.op = app.Operation{Kind: app.OpCleanLeftovers, Game: game, Pack: testIndex.Packs[0]}
+	m.Update(opDoneMsg{outcome: app.Outcome{Removed: []string{"BepInEx/", "winhttp.dll"}}})
 	if v := m.View(); !strings.Contains(v, "Removed 2 leftover item(s)") || !strings.Contains(v, "BepInEx/ (folder)") {
 		t.Errorf("cleanup result:\n%s", v)
 	}
@@ -203,18 +202,18 @@ func TestLeftoversOfferCleanupThenResult(t *testing.T) {
 	}
 }
 
-func TestFailedUpdateAfterLibraryErrorReloads(t *testing.T) {
-	m := startup(t, true, remoteLoadedMsg{err: errTest("connection refused")}, updateCheckedMsg{rel: &update.Release{Version: "9.0.0"}})
+func TestModel_Update_updateFailsAfterLibraryError_continueReloadsLibrary(t *testing.T) {
+	m := startup(t, true, remoteLoadedMsg{err: errors.New("load games: connection refused")}, updateCheckedMsg{release: &update.Release{Version: "9.0.0"}})
 	m.startUpdate()
-	m.Update(updateAppliedMsg{err: errTest("download failed")})
-	if m.screen != scrResult {
+	m.Update(updateAppliedMsg{err: errors.New("download failed")})
+	if m.screen != screenResult {
 		t.Fatalf("screen = %v, want result", m.screen)
 	}
 	// Continuing must reload the library, not detect games against a nil index.
 	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
 		t.Fatal("no command after continuing")
 	}
-	if m.screen != scrLoading || m.remoteDone {
+	if m.screen != screenLoading || m.remoteDone {
 		t.Fatalf("screen = %v, remoteDone = %v, want library reload", m.screen, m.remoteDone)
 	}
 }
