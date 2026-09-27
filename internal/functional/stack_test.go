@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Knurobroddy/crackers-tui/internal/app"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/detect/steam"
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
@@ -19,14 +20,12 @@ const (
 // stack wires real components against a fake world. Scenario tests use only
 // its methods, so its internals can move to the app layer without touching them.
 type stack struct {
-	t      *testing.T
-	world  *fakeworld.World
-	client *remote.Client
-	reg    *detect.Registry
-	engine *engine.Engine
-	game   detect.Result
-	pack   remote.PackRef
-	index  *remote.Index
+	t       *testing.T
+	world   *fakeworld.World
+	app     *app.App
+	library *app.Library
+	game    app.Game
+	pack    remote.PackRef
 }
 
 func newStack(t *testing.T, w *fakeworld.World, goos string) *stack {
@@ -35,51 +34,64 @@ func newStack(t *testing.T, w *fakeworld.World, goos string) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	strategy := steam.New([]string{w.SteamRoot}, goos)
-	s := &stack{t: t, world: w, client: client, reg: detect.NewRegistry(strategy), engine: engine.New(client, testAppVersion, engine.OSFiles{})}
+	eng := engine.New(client, testAppVersion, engine.OSFiles{})
+	application := app.New(app.Deps{
+		Catalog:   client,
+		Detector:  detect.NewRegistry(steam.New([]string{w.SteamRoot}, goos)),
+		Installer: eng,
+		Status:    eng,
+	})
+	s := &stack{t: t, world: w, app: application}
 	s.detect()
 	return s
 }
 
-// detect loads the library and requires exactly one detected install.
 func (s *stack) detect() {
 	s.t.Helper()
 	ctx := context.Background()
-	games, err := s.client.FetchGames(ctx)
+	library, err := s.app.LoadLibrary(ctx)
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	if s.index, err = s.client.FetchIndex(ctx); err != nil {
-		s.t.Fatal(err)
+	games := s.app.DetectGames(ctx, library)
+	if len(games) != 1 {
+		s.t.Fatalf("detected %d installs, want 1: %+v", len(games), games)
 	}
-	results := s.reg.Detect(games.Games, s.index.GamesWithPacks())
-	if len(results) != 1 {
-		s.t.Fatalf("detected %d installs, want 1: %+v", len(results), results)
-	}
-	s.game = results[0]
-	s.pack, _ = s.index.Pack(testPackID)
+	s.library, s.game = library, games[0]
+	s.pack, _ = library.Index.Pack(testPackID)
 }
 
-func (s *stack) request(cleanLeftovers bool) engine.InstallRequest {
-	return engine.InstallRequest{Game: s.game, FilesKey: "windows", Pack: s.pack, CleanLeftovers: cleanLeftovers}
+func (s *stack) operation(kind app.OpKind) app.Operation {
+	return app.Operation{Kind: kind, Game: s.game, Pack: s.pack}
+}
+
+func (s *stack) run(op app.Operation) (app.Outcome, error) {
+	return s.app.Run(context.Background(), op, nil)
 }
 
 func (s *stack) install() error {
-	return s.engine.Install(context.Background(), s.request(false), nil)
+	_, err := s.run(s.operation(app.OpInstall))
+	return err
 }
 
 func (s *stack) installCleaningLeftovers() error {
-	return s.engine.Install(context.Background(), s.request(true), nil)
+	op := s.operation(app.OpInstall)
+	op.CleanLeftovers = true
+	_, err := s.run(op)
+	return err
 }
 
 func (s *stack) remove() error {
-	return s.engine.Remove(context.Background(), s.game.RootDir, nil)
+	_, err := s.run(s.operation(app.OpRemove))
+	return err
 }
 
 func (s *stack) cleanLeftovers() ([]string, error) {
-	return s.engine.CleanLeftovers(context.Background(), s.request(false), nil)
+	outcome, err := s.run(s.operation(app.OpCleanLeftovers))
+	return outcome.Removed, err
 }
 
 func (s *stack) state() engine.State {
-	return s.engine.Status(context.Background(), s.game.RootDir, s.index).State
+	s.detect()
+	return s.game.Status.State
 }

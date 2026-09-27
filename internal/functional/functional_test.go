@@ -36,8 +36,8 @@ func TestValheim_InstallThenRemove_eachBuild_restoresVanilla(t *testing.T) {
 		t.Run(tc.build, func(t *testing.T) {
 			w := fakeworld.New(t, fakeworld.Options{WithPrefix: tc.withPrefix})
 			s := newStack(t, w, tc.goos)
-			if s.game.BuildID != tc.build {
-				t.Fatalf("build = %q, want %q", s.game.BuildID, tc.build)
+			if s.game.Install.BuildID != tc.build {
+				t.Fatalf("build = %q, want %q", s.game.Install.BuildID, tc.build)
 			}
 			vanilla := fakeworld.Tree(t, w.Library)
 
