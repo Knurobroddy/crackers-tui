@@ -21,7 +21,6 @@ const (
 // its methods, so its internals can move to the app layer without touching them.
 type stack struct {
 	t       *testing.T
-	world   *fakeworld.World
 	app     *app.App
 	library *app.Library
 	game    app.Game
@@ -41,7 +40,7 @@ func newStack(t *testing.T, w *fakeworld.World, goos string) *stack {
 		Installer: eng,
 		Status:    eng,
 	})
-	s := &stack{t: t, world: w, app: application}
+	s := &stack{t: t, app: application}
 	s.detect()
 	return s
 }
