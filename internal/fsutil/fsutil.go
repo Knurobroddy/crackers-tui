@@ -10,15 +10,15 @@ import (
 )
 
 // WriteAtomic writes data to path via path+TmpSuffix and a rename, so readers
-// never see a partial file. The tmp file is removed on error.
+// never see a partial file. The temporary file is removed on error.
 func WriteAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp := path + config.TmpSuffix
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		os.Remove(tmp)
+	tempPath := path + config.TmpSuffix
+	if err := os.WriteFile(tempPath, data, perm); err != nil {
+		_ = os.Remove(tempPath)
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
 		return err
 	}
 	return nil
