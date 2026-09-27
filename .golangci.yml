@@ -1,0 +1,63 @@
+# Enforces the [lint] rules in CONVENTIONS.md. CI fails on any finding.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - dupl
+    - errcheck
+    - errorlint
+    - funlen
+    - gocognit
+    - govet
+    - ineffassign
+    - mnd
+    - nestif
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    funlen:
+      lines: 120
+      statements: -1
+      ignore-comments: true
+    gocognit:
+      min-complexity: 30
+    nestif:
+      min-complexity: 5
+    dupl:
+      threshold: 150
+    mnd:
+      ignored-numbers: ["0", "1", "2", "-1"]
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: var-naming
+        - name: error-strings
+        - name: error-naming
+        - name: error-return
+        - name: errorf
+        - name: indent-error-flow
+        - name: early-return
+        - name: superfluous-else
+        - name: receiver-naming
+        - name: unused-parameter
+        - name: blank-imports
+        - name: context-as-argument
+        - name: increment-decrement
+        - name: range
+        - name: time-naming
+        - name: unexported-return
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [dupl, funlen, mnd, gocognit]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: [github.com/Knurobroddy/crackers-tui]

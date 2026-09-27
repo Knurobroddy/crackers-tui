@@ -4,3 +4,8 @@
 
 # Agent notes and handovers (local only; ADRs in .claude/ stay tracked)
 /.claude/notes/
+
+# Developer and agent docs (local only; README is for players)
+/CLAUDE.md
+/CONVENTIONS.md
+/DEVELOPMENT.md
