@@ -202,8 +202,8 @@ func TestClient_FetchManifest_variousManifests_parsesOrRejects(t *testing.T) {
 	if _, _, err := c.FetchManifest(ctx, "packs/schema.json"); !IsUpdateRequired(err) {
 		t.Errorf("schema 2 manifest: err = %v", err)
 	}
-	if _, _, err := c.FetchManifest(ctx, "packs/kind.json"); err == nil {
-		t.Error("unknown kind accepted")
+	if _, _, err := c.FetchManifest(ctx, "packs/kind.json"); !IsUpdateRequired(err) {
+		t.Errorf("unknown file kind: err = %v, want update required", err)
 	}
 	if _, _, err := c.FetchManifest(ctx, "packs/missing.json"); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("missing manifest: err = %v", err)

@@ -208,7 +208,7 @@ func (fe FileEntry) validate() error {
 		}
 	case KindZip:
 	default:
-		return fmt.Errorf("unknown kind %q for %s", fe.Kind, fe.URL)
+		return &UpdateRequiredError{Doc: "pack manifest", Reason: fmt.Sprintf("unknown file kind %q", fe.Kind)}
 	}
 	return nil
 }
