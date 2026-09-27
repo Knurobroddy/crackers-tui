@@ -2,31 +2,12 @@ package remote
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 )
-
-// UpdateRequiredError means the remote needs a newer app: a schema_version
-// above what this build supports, or an unmet min_app_version.
-type UpdateRequiredError struct {
-	Doc        string // e.g. "games.json"
-	MinVersion string // set when min_app_version is not met
-	Reason     string
-}
-
-func (e *UpdateRequiredError) Error() string {
-	return fmt.Sprintf("Please update %s (%s: %s).", config.AppName, e.Doc, e.Reason)
-}
-
-// IsUpdateRequired reports whether err is (or wraps) an UpdateRequiredError.
-func IsUpdateRequired(err error) bool {
-	var u *UpdateRequiredError
-	return errors.As(err, &u)
-}
 
 // CheckSchema fails if a document's schema_version is newer than supported.
 func CheckSchema(doc string, got, supported int) error {
@@ -57,8 +38,8 @@ func CheckMinAppVersion(doc, minVersion, appVersion string) error {
 
 // VersionAtLeast reports whether have >= want (semver, optional "v" prefix).
 func VersionAtLeast(have, want string) (bool, error) {
-	c, err := CompareVersions(have, want)
-	return c >= 0, err
+	compared, err := CompareVersions(have, want)
+	return compared >= 0, err
 }
 
 // CompareVersions compares two semantic versions and returns -1, 0 or 1.
@@ -84,29 +65,29 @@ type version struct {
 	pre  []string
 }
 
-func parseVersion(s string) (version, error) {
-	var v version
-	orig := s
-	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
-	if i := strings.IndexByte(s, '+'); i >= 0 {
-		s = s[:i]
+func parseVersion(raw string) (version, error) {
+	var parsed version
+	orig := raw
+	raw = strings.TrimPrefix(strings.TrimSpace(raw), "v")
+	if i := strings.IndexByte(raw, '+'); i >= 0 {
+		raw = raw[:i]
 	}
-	if i := strings.IndexByte(s, '-'); i >= 0 {
-		v.pre = strings.Split(s[i+1:], ".")
-		s = s[:i]
+	if i := strings.IndexByte(raw, '-'); i >= 0 {
+		parsed.pre = strings.Split(raw[i+1:], ".")
+		raw = raw[:i]
 	}
-	parts := strings.Split(s, ".")
+	parts := strings.Split(raw, ".")
 	if len(parts) == 0 || len(parts) > 3 {
-		return v, fmt.Errorf("invalid version %q", orig)
+		return parsed, fmt.Errorf("invalid version %q", orig)
 	}
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
 		if err != nil || n < 0 {
-			return v, fmt.Errorf("invalid version %q", orig)
+			return parsed, fmt.Errorf("invalid version %q", orig)
 		}
-		v.core[i] = n
+		parsed.core[i] = n
 	}
-	return v, nil
+	return parsed, nil
 }
 
 // comparePre orders pre-release identifiers per semver: a release is greater

@@ -31,7 +31,7 @@ type stack struct {
 
 func newStack(t *testing.T, w *fakeworld.World, goos string) *stack {
 	t.Helper()
-	client, err := remote.NewClient(w.LibraryURL, testAppVersion, nil)
+	client, err := remote.NewClient(w.LibraryURL, testAppVersion)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -430,7 +430,7 @@ func (b *Builder) fetch(ctx context.Context, rawURL, dst string) (string, int64,
 		return "", 0, fmt.Errorf("external url %q must be an absolute http(s) URL", rawURL)
 	}
 	if b.Client == nil {
-		b.Client = remote.NewDownloader("modinst-pack", nil)
+		b.Client = remote.NewDownloader("modinst-pack")
 	}
 	return b.Client.Fetch(ctx, rawURL, dst)
 }

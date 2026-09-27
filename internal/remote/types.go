@@ -136,7 +136,7 @@ func (h HookSpec) AppliesTo(buildID string) bool {
 	return false
 }
 
-// Manifest is a pack manifest (ADR §3.3).
+// Manifest is a pack manifest.
 type Manifest struct {
 	SchemaVersion int                    `json:"schema_version"`
 	ID            string                 `json:"id"`
@@ -177,8 +177,8 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("pack %q uses a mod loader, which is not supported in this version of %s", m.ID, config.AppName)
 	}
 	for list, entries := range m.Files {
-		for i, fe := range entries {
-			if err := fe.validate(); err != nil {
+		for i, entry := range entries {
+			if err := entry.validate(); err != nil {
 				return fmt.Errorf("pack %q: files.%s[%d]: %w", m.ID, list, i, err)
 			}
 		}
@@ -208,7 +208,7 @@ func (fe FileEntry) validate() error {
 		}
 	case KindZip:
 	default:
-		return fmt.Errorf("unknown kind %q for %s (update %s)", fe.Kind, fe.URL, config.AppName)
+		return fmt.Errorf("unknown kind %q for %s", fe.Kind, fe.URL)
 	}
 	return nil
 }

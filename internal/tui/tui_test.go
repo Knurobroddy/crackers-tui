@@ -47,7 +47,7 @@ func TestForcedUpdateWithoutRelease(t *testing.T) {
 	m := startup(t, true,
 		remoteLoadedMsg{err: &remote.UpdateRequiredError{Doc: "games.json", Reason: "requires version 9.0.0 or newer"}},
 		updateCheckedMsg{})
-	if m.screen != scrError || !strings.Contains(m.View(), "Please update Crackers Modinst") {
+	if m.screen != scrError || !strings.Contains(m.View(), "app update required") {
 		t.Fatalf("screen = %v, view:\n%s", m.screen, m.View())
 	}
 }

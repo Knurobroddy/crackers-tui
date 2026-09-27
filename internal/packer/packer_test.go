@@ -138,7 +138,7 @@ func TestBuildThenInstallAndRemove(t *testing.T) {
 	}
 
 	// Install the built pack with the real engine from the served library.
-	c, err := remote.NewClient(e.srv.URL+"/lib/", "0.1.0", nil)
+	c, err := remote.NewClient(e.srv.URL+"/lib/", "0.1.0")
 	if err != nil {
 		t.Fatal(err)
 	}

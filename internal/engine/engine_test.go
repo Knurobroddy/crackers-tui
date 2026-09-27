@@ -57,7 +57,7 @@ func (r *fakeRemote) put(name string, b []byte) {
 }
 
 func (r *fakeRemote) client() *remote.Client {
-	c, err := remote.NewClient(r.srv.URL+"/", "0.1.0", nil)
+	c, err := remote.NewClient(r.srv.URL+"/", "0.1.0")
 	if err != nil {
 		r.t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ import (
 func TestTestdataRemoteIsConsistent(t *testing.T) {
 	srv := httptest.NewServer(http.FileServer(http.Dir("../../testdata/remote")))
 	defer srv.Close()
-	c, err := NewClient(srv.URL, "0.1.0", nil)
+	c, err := NewClient(srv.URL, "0.1.0")
 	if err != nil {
 		t.Fatal(err)
 	}

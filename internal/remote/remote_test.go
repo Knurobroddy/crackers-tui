@@ -30,7 +30,7 @@ func serve(t *testing.T, files map[string]string) *httptest.Server {
 			http.NotFound(w, r)
 			return
 		}
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -38,7 +38,7 @@ func serve(t *testing.T, files map[string]string) *httptest.Server {
 
 func newClient(t *testing.T, base string) *Client {
 	t.Helper()
-	c, err := NewClient(base, "1.2.3", nil)
+	c, err := NewClient(base, "1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +63,10 @@ func TestResolve(t *testing.T) {
 	if _, err := c.Resolve("file:///etc/passwd"); err == nil {
 		t.Error("file:// URL accepted")
 	}
-	if _, err := NewClient("ftp://example.com/", "1", nil); err == nil {
+	if _, err := NewClient("ftp://example.com/", "1"); err == nil {
 		t.Error("ftp base accepted")
 	}
-	d := NewDownloader("1", nil)
+	d := NewDownloader("1")
 	if got, err := d.Resolve("https://example.com/a.zip"); err != nil || got != "https://example.com/a.zip" {
 		t.Errorf("downloader Resolve = %q, %v", got, err)
 	}
@@ -268,14 +268,14 @@ func TestTransientErrorsRetried(t *testing.T) {
 				http.Error(w, "busy", http.StatusInternalServerError)
 				return
 			}
-			w.Write(content)
+			_, _ = w.Write(content)
 		default:
 			missCalls++
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
-	c, _ := NewClient(srv.URL, "1.2.3", nil)
+	c, _ := NewClient(srv.URL, "1.2.3")
 	c.retryDelay = time.Millisecond
 	dst := filepath.Join(t.TempDir(), "f")
 	if err := c.Download(context.Background(), FileEntry{URL: "flaky", SHA256: sha(content), Size: int64(len(content))}, dst, nil); err != nil {

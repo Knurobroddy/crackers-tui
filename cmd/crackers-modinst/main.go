@@ -68,7 +68,7 @@ func run() (code int) {
 	}
 	log.Info("starting", "app", config.AppName, "version", version, "os", runtime.GOOS, "arch", runtime.GOARCH, "remote", base)
 
-	client, err := remote.NewClient(base, version, log)
+	client, err := remote.NewClient(base, version)
 	if err != nil {
 		return fatal(log, err, interactive)
 	}
