@@ -194,6 +194,7 @@ func recoverPanic(interactive bool) {
 	slog.Error("panic", "panic", r, "stack", string(debug.Stack()))
 	fmt.Fprintf(os.Stderr, "%s hit an internal error: %v\nLog file: %s\n", config.AppName, r, config.LogPath())
 	pauseOnWindows(interactive)
+	// os.Exit skips the deferred closeLog; safe because the log file is unbuffered.
 	os.Exit(exitError)
 }
 
