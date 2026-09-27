@@ -69,11 +69,17 @@ func (s fakeSource) DownloadReleaseAsset(_ context.Context, _ *selfupdate.Releas
 }
 
 func zipWith(t *testing.T, files map[string]string) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	for name, content := range files {
-		w, _ := zw.Create(name)
-		w.Write([]byte(content))
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
@@ -82,15 +88,25 @@ func zipWith(t *testing.T, files map[string]string) []byte {
 }
 
 func tarGzWith(t *testing.T, files map[string]string) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	for name, content := range files {
-		tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(content)), Typeflag: tar.TypeReg})
-		tw.Write([]byte(content))
+		header := &tar.Header{Name: name, Mode: 0o755, Size: int64(len(content)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	tw.Close()
-	gz.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return buf.Bytes()
 }
 
@@ -117,14 +133,14 @@ func release(t *testing.T, version string, tamper bool) fakeRelease {
 	}}
 }
 
-func TestAssetNamesAndApplyPerOS(t *testing.T) {
+func TestUpdater_applyTo_assetPickedByCanonicalName_updatesRenamedExecutable(t *testing.T) {
 	for _, tc := range []struct{ goos, exeName, want string }{
 		{"windows", "crackers-modinst.exe", "new windows binary"},
 		{"windows", "crackers-modinst (1).exe", "new windows binary"}, // renamed by a browser
 		{"linux", "crackers-modinst", "new linux binary"},
 	} {
 		t.Run(tc.goos+"/"+tc.exeName, func(t *testing.T) {
-			u, err := newUpdater("0.1.0", fakeSource{release(t, "0.2.0", false)}, tc.goos, "amd64", nil)
+			u, err := newUpdater("0.1.0", fakeSource{release(t, "0.2.0", false)}, tc.goos, "amd64")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,7 +152,9 @@ func TestAssetNamesAndApplyPerOS(t *testing.T) {
 				t.Fatalf("picked %s %s", r.Version, r.rel.AssetName)
 			}
 			target := filepath.Join(t.TempDir(), tc.exeName)
-			os.WriteFile(target, []byte("old binary"), 0o755)
+			if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			if err := u.applyTo(context.Background(), r, target); err != nil {
 				t.Fatal(err)
 			}
@@ -147,21 +165,23 @@ func TestAssetNamesAndApplyPerOS(t *testing.T) {
 	}
 }
 
-func TestNoUpdateWhenCurrent(t *testing.T) {
-	u, _ := newUpdater("0.2.0", fakeSource{release(t, "0.2.0", false)}, "linux", "amd64", nil)
+func TestUpdater_Check_currentVersionUpToDate_returnsNil(t *testing.T) {
+	u, _ := newUpdater("0.2.0", fakeSource{release(t, "0.2.0", false)}, "linux", "amd64")
 	if r, err := u.Check(context.Background()); err != nil || r != nil {
 		t.Errorf("Check = %v, %v; want nil", r, err)
 	}
 }
 
-func TestChecksumMismatchRejected(t *testing.T) {
-	u, _ := newUpdater("0.1.0", fakeSource{release(t, "0.2.0", true)}, "linux", "amd64", nil)
+func TestUpdater_applyTo_checksumMismatch_rejectsAndLeavesTargetUnchanged(t *testing.T) {
+	u, _ := newUpdater("0.1.0", fakeSource{release(t, "0.2.0", true)}, "linux", "amd64")
 	r, err := u.Check(context.Background())
 	if err != nil || r == nil {
 		t.Fatalf("Check = %v, %v", r, err)
 	}
 	target := filepath.Join(t.TempDir(), "crackers-modinst")
-	os.WriteFile(target, []byte("old binary"), 0o755)
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := u.applyTo(context.Background(), r, target); err == nil {
 		t.Fatal("tampered release applied")
 	}

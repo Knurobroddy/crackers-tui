@@ -81,7 +81,7 @@ func run() (code int) {
 	update.CleanupOld()
 	var updater *update.Updater
 	if !*noUpdate && update.Enabled(version) {
-		if updater, err = update.New(version, log); err != nil {
+		if updater, err = update.New(version); err != nil {
 			log.Warn("self-update disabled", "err", err)
 			updater = nil
 		}
