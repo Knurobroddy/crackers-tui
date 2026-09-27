@@ -41,7 +41,7 @@ type World struct {
 // and a non-ASCII rune on purpose.
 func New(t *testing.T, opts Options) *World {
 	t.Helper()
-	steamRoot := filepath.Join(t.TempDir(), "Gry Steam ł")
+	steamRoot := filepath.Join(resolvedTempDir(t), "Gry Steam ł")
 	w := &World{
 		SteamRoot:  steamRoot,
 		Library:    steamRoot,
@@ -93,6 +93,18 @@ func RepoPath(parts ...string) string {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
 	return filepath.Join(append([]string{root}, parts...)...)
+}
+
+// resolvedTempDir returns t.TempDir() in the form detection reports: on
+// Windows runners TEMP can be an 8.3 short path (RUNNER~1) that
+// filepath.EvalSymlinks expands, so World paths must be resolved too.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func (w *World) writeSteamFiles(t *testing.T) {
