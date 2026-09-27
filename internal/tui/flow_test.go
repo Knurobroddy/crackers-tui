@@ -28,15 +28,17 @@ const (
 	flowHeight  = 40
 	flowTimeout = 10 * time.Second
 
-	// borderRune is the panel's vertical border (lipgloss.RoundedBorder),
-	// which a hard-wrapped path is split around.
-	borderRune = "│"
+	// wrapBoundary is the optional line break the panel's hard wrap may
+	// have inserted between two runes of a long path, once box-drawing
+	// decoration and per-line whitespace have already been stripped.
+	wrapBoundary = `\n?`
 )
 
-// wrapBoundary matches the border and line-fill padding lipgloss inserts
-// where it hard-wraps a token (a long temp path) that overflows one line of
-// the panel.
-var wrapBoundary = "(?:[ \t]*" + borderRune + "[ \t]*\r?\n[ \t]*" + borderRune + "[ \t]*)?"
+// boxDrawingRegexp matches the panel's box-drawing border (lipgloss's
+// RoundedBorder) and the header banner's block-art glyphs — the Unicode Box
+// Drawing and Block Elements ranges — so normalizePaths can reduce a screen
+// to its text content.
+var boxDrawingRegexp = regexp.MustCompile(`[\x{2500}-\x{259F}]`)
 
 func TestMain(m *testing.M) {
 	lipgloss.SetColorProfile(termenv.Ascii) // golden files without ANSI colors
@@ -96,9 +98,8 @@ func TestFlow_InstallFromMainMenu_vanillaGame_showsInstalledResult(t *testing.T)
 
 func TestFlow_Install_manualModsPresent_offersCleanupThenInstalls(t *testing.T) {
 	w := fakeworld.New(t, fakeworld.Options{})
-	if err := os.MkdirAll(filepath.Join(w.GameRoot, "BepInEx", "plugins"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	leftover := filepath.Join(w.GameRoot, "BepInEx", "plugins", "Old.dll")
+	writeLeftoverFile(t, leftover)
 	tm := teatest.NewTestModel(t, newFlowModel(t, w), teatest.WithInitialTermSize(flowWidth, flowHeight))
 
 	waitFor(t, tm, "Not installed")
@@ -115,7 +116,26 @@ func TestFlow_Install_manualModsPresent_offersCleanupThenInstalls(t *testing.T) 
 	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
 	waitFor(t, tm, "Installed Test pack into")
 
-	golden.RequireEqual(t, normalizePaths(finalView(t, tm), w))
+	view := finalView(t, tm)
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("leftover file still present after cleanup+install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(w.GameRoot, ".crackers-modinst.json")); err != nil {
+		t.Fatalf("marker missing after UI install: %v", err)
+	}
+	golden.RequireEqual(t, normalizePaths(view, w))
+}
+
+// writeLeftoverFile creates a manually-installed mod file the leftovers
+// screen should offer to delete.
+func writeLeftoverFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("an old manually-installed mod"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestFlow_RemoveInstalledPack_showsVanillaResult(t *testing.T) {
@@ -151,35 +171,101 @@ func installFirst(t *testing.T, w *fakeworld.World) {
 	}
 }
 
-// normalizePaths replaces the per-run temp paths so golden files are stable.
-// w.GameRoot embeds a random, variable-length suffix from t.TempDir(), so on
-// Windows it can be long enough to be hard-wrapped inside the 96-column
-// panel; replaceWrappedPath tolerates that, and trimBorderPadding removes
-// the resulting variable-length line-fill padding before the border.
+// normalizePaths reduces view to its text content — stripping box-drawing
+// decoration, trimming each line and dropping blank ones — then replaces
+// the run-specific temp paths with a fixed placeholder, tolerating a wrap
+// between any two of a path's runes. Normalizing to text content, rather
+// than matching the raw bordered layout, keeps the golden files independent
+// of the panel's row count: whether w.GameRoot is short enough to fit one
+// line (e.g. a CI runner's shorter temp dir) or long enough to hard-wrap (a
+// Windows dev machine's temp dir), the normalized output is identical; see
+// TestNormalizePaths_shortAndWrappedPath_sameOutput.
 func normalizePaths(view []byte, w *fakeworld.World) []byte {
-	view = replaceWrappedPath(view, w.GameRoot)
-	view = replaceWrappedPath(view, filepath.ToSlash(w.GameRoot))
-	return trimBorderPadding(view)
+	text := stripDecoration(string(view))
+	text = replaceWrappedPath(text, w.GameRoot)
+	text = replaceWrappedPath(text, filepath.ToSlash(w.GameRoot))
+	return []byte(dropBlankLines(text))
 }
 
-// replaceWrappedPath replaces every occurrence of path in view with
-// "<GAME_ROOT>", tolerating a wrapBoundary between any two of its runes.
-func replaceWrappedPath(view []byte, path string) []byte {
+// stripDecoration removes box-drawing characters from each line, then trims
+// the line's remaining whitespace.
+func stripDecoration(view string) string {
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(boxDrawingRegexp.ReplaceAllString(line, ""))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// replaceWrappedPath replaces every occurrence of path in text with
+// "<GAME_ROOT>", tolerating wrapBoundary between any two of its runes and a
+// space rune of path itself being consumed by a word-wrap break (the panel
+// wraps on whitespace first, and a path can contain one, e.g. "Gry Steam ł").
+func replaceWrappedPath(text, path string) string {
 	if path == "" {
-		return view
+		return text
 	}
 	var pattern strings.Builder
 	for i, r := range []rune(path) {
 		if i > 0 {
 			pattern.WriteString(wrapBoundary)
 		}
-		pattern.WriteString(regexp.QuoteMeta(string(r)))
+		pattern.WriteString(runePattern(r))
 	}
-	return regexp.MustCompile(pattern.String()).ReplaceAll(view, []byte("<GAME_ROOT>"))
+	return regexp.MustCompile(pattern.String()).ReplaceAllString(text, "<GAME_ROOT>")
 }
 
-// trimBorderPadding drops the line-fill spaces lipgloss adds before the
-// panel's border; their count depends on how long the replaced path was.
-func trimBorderPadding(view []byte) []byte {
-	return regexp.MustCompile(`[ \t]+`+borderRune).ReplaceAll(view, []byte(borderRune))
+// runePattern matches r literally, except a space, which the panel's
+// word-wrap may replace with a line break instead of leaving it in the text.
+func runePattern(r rune) string {
+	if r == ' ' {
+		return `[ \n]`
+	}
+	return regexp.QuoteMeta(string(r))
+}
+
+// dropBlankLines removes lines left empty by stripDecoration.
+func dropBlankLines(text string) string {
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		if line != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// TestNormalizePaths_shortAndWrappedPath_sameOutput proves normalizePaths is
+// independent of whether, and where, the panel had to hard-wrap the path: a
+// short path that fits on one line (as on a CI runner with a short temp
+// dir), a long path split mid-token across two lines (as on a Windows dev
+// machine's deep temp dir), and a long path split exactly on a space the
+// path itself contains (lipgloss word-wraps on whitespace first, and "Gry
+// Steam ł" has one) must all normalize to the exact same text.
+func TestNormalizePaths_shortAndWrappedPath_sameOutput(t *testing.T) {
+	short := &fakeworld.World{GameRoot: `C:\g\Valheim`}
+	long := &fakeworld.World{
+		GameRoot: `C:\Users\test\AppData\Local\Temp\ALongTestNameThatOverflowsPanel1234567890\001\Gry Steam ł\steamapps\common\Valheim`,
+	}
+	spaceWrap := &fakeworld.World{GameRoot: `C:\st\TestFlowShort0123456789\001\Gry Steam ł\steamapps\common\Valheim`}
+	want := []byte("Installed Test pack into <GAME_ROOT>.")
+
+	runes := []rune(long.GameRoot)
+	split := len(runes) / 2
+	spaceIdx := strings.IndexRune(spaceWrap.GameRoot, ' ')
+	for _, tc := range []struct {
+		name string
+		w    *fakeworld.World
+		view string
+	}{
+		{"unwrapped", short, "│  Installed Test pack into " + short.GameRoot + ".  │\n"},
+		{"wrapped mid-token", long, "│  Installed Test pack into " + string(runes[:split]) + "  │\n" +
+			"│  " + string(runes[split:]) + ".  │\n"},
+		{"wrapped on the path's own space", spaceWrap, "│  Installed Test pack into " + spaceWrap.GameRoot[:spaceIdx] + "│\n" +
+			"│  " + spaceWrap.GameRoot[spaceIdx+1:] + ".  │\n"},
+	} {
+		if got := normalizePaths([]byte(tc.view), tc.w); !bytes.Equal(got, want) {
+			t.Errorf("%s: normalizePaths() = %q, want %q", tc.name, got, want)
+		}
+	}
 }
