@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -114,10 +115,12 @@ func (a *App) CheckUpdate(ctx context.Context) (*update.Release, error) {
 	return a.deps.Updater.Check(ctx)
 }
 
-// ApplyUpdate installs release, replacing the running executable.
+// ApplyUpdate installs release, replacing the running executable. It fails
+// when updates are disabled, so the caller never reports a skipped update as
+// done.
 func (a *App) ApplyUpdate(ctx context.Context, release *update.Release) error {
 	if a.deps.Updater == nil {
-		return nil
+		return errors.New("updates are disabled")
 	}
 	return a.deps.Updater.Apply(ctx, release)
 }

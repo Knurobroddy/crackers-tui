@@ -12,6 +12,7 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
+	"github.com/Knurobroddy/crackers-tui/internal/update"
 )
 
 var testGames = &remote.Games{Games: []detect.GameDef{{
@@ -91,6 +92,14 @@ func TestApp_Run_cleanLeftovers_returnsRemovedPaths(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"BepInEx/"}, outcome.Removed); diff != "" {
 		t.Errorf("removed (-want +got):\n%s", diff)
+	}
+}
+
+func TestApp_ApplyUpdate_noUpdater_returnsError(t *testing.T) {
+	a := app.New(app.Deps{})
+
+	if err := a.ApplyUpdate(context.Background(), &update.Release{Version: "9.0.0"}); err == nil {
+		t.Fatal("ApplyUpdate succeeded without an updater, want error")
 	}
 }
 
