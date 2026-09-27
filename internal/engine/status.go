@@ -10,9 +10,10 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
 )
 
-// State is the install state of a game (ADR §5.1).
+// State is the install state of a game.
 type State int
 
+// The install states of a game.
 const (
 	NotInstalled State = iota
 	Installed
@@ -52,25 +53,25 @@ func (s Status) String() string {
 }
 
 // Status reads the marker in root and compares it with the remote.
-func (e *Engine) Status(ctx context.Context, root string, ix *remote.Index) Status {
-	mk, err := ReadMarker(root)
+func (e *Engine) Status(ctx context.Context, root string, index *remote.Index) Status {
+	marker, err := ReadMarker(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return Status{State: NotInstalled}
 	}
 	if err != nil {
 		return Status{State: Unknown, Err: err}
 	}
-	ref, ok := ix.Pack(mk.PackID)
+	ref, ok := index.Pack(marker.PackID)
 	if !ok {
-		return Status{State: NotOffered, Marker: mk}
+		return Status{State: NotOffered, Marker: marker}
 	}
 	hash, err := e.source.ManifestHash(ctx, ref.Manifest)
 	if err != nil {
-		slog.Warn("could not check for pack update", "pack", mk.PackID, "err", err)
-		return Status{State: Installed, Marker: mk, Pack: ref, CheckErr: err}
+		slog.Warn("skip pack update check", "pack_id", marker.PackID, "err", err)
+		return Status{State: Installed, Marker: marker, Pack: ref, CheckErr: err}
 	}
-	if hash != mk.ManifestSHA256 {
-		return Status{State: UpdateAvailable, Marker: mk, Pack: ref}
+	if hash != marker.ManifestSHA256 {
+		return Status{State: UpdateAvailable, Marker: marker, Pack: ref}
 	}
-	return Status{State: Installed, Marker: mk, Pack: ref}
+	return Status{State: Installed, Marker: marker, Pack: ref}
 }

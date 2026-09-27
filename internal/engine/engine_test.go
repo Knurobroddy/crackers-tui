@@ -15,10 +15,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
@@ -45,7 +46,7 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 			http.NotFound(w, req)
 			return
 		}
-		w.Write(b)
+		_, _ = w.Write(b)
 	}))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -90,7 +91,9 @@ func makeZip(t *testing.T, entries ...zipEntry) []byte {
 			t.Fatal(err)
 		}
 		if !strings.HasSuffix(e.name, "/") {
-			w.Write([]byte(e.content))
+			if _, err := w.Write([]byte(e.content)); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := zw.Close(); err != nil {
@@ -179,19 +182,16 @@ func newFakeGame(t *testing.T, withPrefix bool) fakeGame {
 	lib := t.TempDir()
 	root := filepath.Join(lib, "steamapps", "common", "Valheim")
 	for _, f := range []string{"valheim.exe", "valheim_Data/Managed/assembly_valheim.dll", "UnityPlayer.dll"} {
-		p := filepath.Join(root, filepath.FromSlash(f))
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		os.WriteFile(p, []byte("vanilla "+f), 0o644)
+		writeTestFile(t, filepath.Join(root, filepath.FromSlash(f)), "vanilla "+f)
 	}
 	g := fakeGame{lib: lib, root: root}
 	if withPrefix {
 		g.reg = filepath.Join(lib, "steamapps", "compatdata", "892970", "pfx", "user.reg")
-		os.MkdirAll(filepath.Dir(g.reg), 0o755)
 		orig, err := os.ReadFile("../../testdata/wine/user.reg")
 		if err != nil {
 			t.Fatal(err)
 		}
-		os.WriteFile(g.reg, orig, 0o644)
+		writeTestFile(t, g.reg, string(orig))
 	}
 	return g
 }
@@ -214,7 +214,7 @@ func (g fakeGame) request(build string, pack remote.PackRef) InstallRequest {
 func snapshot(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	m := map[string]string{}
-	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -226,28 +226,17 @@ func snapshot(t *testing.T, dir string) map[string]string {
 		b, _ := os.ReadFile(p)
 		m[filepath.ToSlash(rel)] = hexSHA(b)
 		return nil
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return m
 }
 
-func assertSameTree(t *testing.T, before, after map[string]string) {
+func assertSameTree(t *testing.T, want, got map[string]string) {
 	t.Helper()
-	if reflect.DeepEqual(before, after) {
-		return
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("tree differs (-want +got):\n%s", diff)
 	}
-	var diff []string
-	for k, v := range after {
-		if before[k] != v {
-			diff = append(diff, "+ "+k)
-		}
-	}
-	for k := range before {
-		if _, ok := after[k]; !ok {
-			diff = append(diff, "- "+k)
-		}
-	}
-	sort.Strings(diff)
-	t.Fatalf("tree differs from pre-install state:\n%s", strings.Join(diff, "\n"))
 }
 
 func readFile(t *testing.T, root, rel string) string {
@@ -261,7 +250,7 @@ func readFile(t *testing.T, root, rel string) string {
 
 // ---- tests -----------------------------------------------------------------
 
-func TestInstallAndRemoveRestoresExactTree(t *testing.T) {
+func TestEngine_Install_thenRemove_restoresExactTree(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g := newFakeGame(t, false)
@@ -331,8 +320,8 @@ func TestInstallAndRemoveRestoresExactTree(t *testing.T) {
 	}
 
 	// Files created by mods at runtime live in owned_dirs and must go too.
-	os.WriteFile(filepath.Join(g.root, "BepInEx", "config", "mod.cfg"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(g.root, "BepInEx", "LogOutput.log"), []byte("x"), 0o644)
+	writeTestFile(t, filepath.Join(g.root, "BepInEx", "config", "mod.cfg"), "x")
+	writeTestFile(t, filepath.Join(g.root, "BepInEx", "LogOutput.log"), "x")
 
 	if err := e.Remove(ctx, g.root, nil); err != nil {
 		t.Fatal(err)
@@ -346,7 +335,7 @@ func TestInstallAndRemoveRestoresExactTree(t *testing.T) {
 	}
 }
 
-func TestInstallWithProtonHookAndRemove(t *testing.T) {
+func TestEngine_Install_protonBuild_appliesHookAndRemoveRestoresUserReg(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g := newFakeGame(t, true)
@@ -415,7 +404,7 @@ func TestEngine_Install_writeFails_rollsBackToVanilla(t *testing.T) {
 	}
 }
 
-func TestHashMismatchAbortsBeforeWriting(t *testing.T) {
+func TestEngine_Install_hashMismatch_failsBeforeWriting(t *testing.T) {
 	r := newFakeRemote(t)
 	m := defaultManifest(t, r)
 	r.put("files/SomeMod.dll", []byte("tampered")) // served bytes no longer match the manifest
@@ -430,7 +419,7 @@ func TestHashMismatchAbortsBeforeWriting(t *testing.T) {
 	assertSameTree(t, before, snapshot(t, g.lib))
 }
 
-func TestUnsafeArchivesRejectedBeforeWriting(t *testing.T) {
+func TestEngine_Install_unsafeArchive_failsBeforeWriting(t *testing.T) {
 	cases := map[string][]byte{
 		"zip-slip":      makeZip(t, zipEntry{name: "ok.txt", content: "x"}, zipEntry{name: "../evil.txt", content: "x"}),
 		"nested-slip":   makeZip(t, zipEntry{name: "a/../../evil.txt", content: "x"}),
@@ -459,7 +448,7 @@ func TestUnsafeArchivesRejectedBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestUnsafeManifestRejected(t *testing.T) {
+func TestEngine_Install_unsafeManifest_failsBeforeWriting(t *testing.T) {
 	good := []byte("x")
 	cases := map[string]map[string]any{
 		"dest-slip":    {"files": map[string]any{"common": []any{entry("files/x", good, "file", "../outside.dll", "")}}},
@@ -494,11 +483,11 @@ func TestUnsafeManifestRejected(t *testing.T) {
 	}
 }
 
-func TestExistingFileAborts(t *testing.T) {
+func TestEngine_Install_unknownFileAtTarget_returnsLeftoversError(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g := newFakeGame(t, false)
-	os.WriteFile(filepath.Join(g.root, "winhttp.dll"), []byte("someone else's"), 0o644)
+	writeTestFile(t, filepath.Join(g.root, "winhttp.dll"), "someone else's")
 	before := snapshot(t, g.lib)
 	err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil)
 	var lo *LeftoversError
@@ -522,14 +511,12 @@ func leftoverGame(t *testing.T) (fakeGame, map[string]string) {
 		"unrelated.txt":                "keep me",
 		"valheim_Data/Managed/old.txt": "game subfolder, not the pack's",
 	} {
-		p := filepath.Join(g.root, filepath.FromSlash(rel))
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		os.WriteFile(p, []byte(content), 0o644)
+		writeTestFile(t, filepath.Join(g.root, filepath.FromSlash(rel)), content)
 	}
 	return g, vanilla
 }
 
-func TestLeftoversCleanedOnConfirmedInstall(t *testing.T) {
+func TestEngine_Install_leftoversConfirmed_deletesThemAndInstalls(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g, _ := leftoverGame(t)
@@ -570,7 +557,7 @@ func TestLeftoversCleanedOnConfirmedInstall(t *testing.T) {
 	assertSameTree(t, withLeftovers, snapshot(t, g.lib))
 }
 
-func TestCleanLeftoversStandalone(t *testing.T) {
+func TestEngine_CleanLeftovers_noPackInstalled_deletesOnlyPackPaths(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g, vanilla := leftoverGame(t)
@@ -596,12 +583,12 @@ func TestCleanLeftoversStandalone(t *testing.T) {
 	if err := e.Install(ctx, g.request("windows", pack), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.CleanLeftovers(ctx, g.request("windows", pack), nil); err == nil || !strings.Contains(err.Error(), "Remove pack") {
+	if _, err := e.CleanLeftovers(ctx, g.request("windows", pack), nil); err == nil || !strings.Contains(err.Error(), "a pack is installed") {
 		t.Errorf("cleanup with installed pack: err = %v", err)
 	}
 }
 
-func TestMissingPrefixAborts(t *testing.T) {
+func TestEngine_Install_protonPrefixMissing_failsBeforeWriting(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, defaultManifest(t, r))
 	g := newFakeGame(t, false) // no compatdata
@@ -613,7 +600,7 @@ func TestMissingPrefixAborts(t *testing.T) {
 	assertSameTree(t, before, snapshot(t, g.lib))
 }
 
-func TestSwitchPackAndStatus(t *testing.T) {
+func TestEngine_Install_reinstallAndSwitch_replacesPackAndUpdatesStatus(t *testing.T) {
 	r := newFakeRemote(t)
 	packA := r.publish(t, packID, defaultManifest(t, r))
 	other := []byte("other pack")
@@ -669,9 +656,9 @@ func TestSwitchPackAndStatus(t *testing.T) {
 	assertSameTree(t, before, snapshot(t, g.lib))
 }
 
-func TestCorruptMarker(t *testing.T) {
+func TestEngine_Remove_corruptMarker_failsAndKeepsMarker(t *testing.T) {
 	g := newFakeGame(t, false)
-	os.WriteFile(MarkerPath(g.root), []byte("{not json"), 0o644)
+	writeTestFile(t, MarkerPath(g.root), "{not json")
 	e := New(nil, "0.1.0", OSFiles{})
 	if st := e.Status(context.Background(), g.root, &remote.Index{}); st.State != Unknown || st.Err == nil {
 		t.Errorf("status = %+v", st)
@@ -684,10 +671,10 @@ func TestCorruptMarker(t *testing.T) {
 	}
 }
 
-func TestMarkerPathsValidatedOnRemove(t *testing.T) {
+func TestEngine_Remove_markerPathsOutsideRoot_failsAndDeletesNothing(t *testing.T) {
 	g := newFakeGame(t, false)
 	outside := filepath.Join(g.lib, "outside.txt")
-	os.WriteFile(outside, []byte("keep"), 0o644)
+	writeTestFile(t, outside, "keep")
 	mk := &Marker{SchemaVersion: 1, PackID: "x", Files: []string{"../../outside.txt"}, OwnedDirs: []string{"../.."}}
 	if err := writeMarker(OSFiles{}, g.root, mk); err != nil {
 		t.Fatal(err)
@@ -703,7 +690,7 @@ func TestMarkerPathsValidatedOnRemove(t *testing.T) {
 	}
 }
 
-func TestDisplayName(t *testing.T) {
+func TestDisplayName_variousURLs_returnsShortName(t *testing.T) {
 	for in, want := range map[string]string{
 		"http://x/files/SomeMod.dll":          "SomeMod.dll",
 		"http://x/files/with%20space.zip?x=1": "with space.zip",
@@ -714,5 +701,51 @@ func TestDisplayName(t *testing.T) {
 		if got := displayName(in); got != want {
 			t.Errorf("displayName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestEngine_Install_failsAfterOldHooksUndone_joinsErrPreviousHooksUndone(t *testing.T) {
+	r := newFakeRemote(t)
+	pack := r.publish(t, packID, defaultManifest(t, r))
+	g := newFakeGame(t, true)
+	if err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("linux_proton", pack), nil); err != nil {
+		t.Fatal(err)
+	}
+	failing := New(r.client(), "0.1.0", &faultyFiles{op: "rename", pathMatch: ".crackers-modinst.json.modinst-tmp", nth: 1})
+
+	err := failing.Install(context.Background(), g.request("linux_proton", pack), nil)
+
+	if !errors.Is(err, errInjected) || !errors.Is(err, ErrPreviousHooksUndone) {
+		t.Fatalf("err = %v, want injected + ErrPreviousHooksUndone", err)
+	}
+}
+
+func TestEngine_Remove_fileCannotBeDeleted_joinsErrRemoveIncompleteAndKeepsMarker(t *testing.T) {
+	r := newFakeRemote(t)
+	pack := r.publish(t, packID, defaultManifest(t, r))
+	g := newFakeGame(t, false)
+	if err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil); err != nil {
+		t.Fatal(err)
+	}
+	failing := New(r.client(), "0.1.0", &faultyFiles{op: "remove", pathMatch: "winhttp.dll", nth: 1})
+
+	err := failing.Remove(context.Background(), g.root, nil)
+
+	if !errors.Is(err, ErrRemoveIncomplete) {
+		t.Fatalf("err = %v, want ErrRemoveIncomplete", err)
+	}
+	if _, statErr := os.Stat(MarkerPath(g.root)); statErr != nil {
+		t.Fatalf("marker gone: %v", statErr)
+	}
+}
+
+// writeTestFile writes content to path, creating its parent folders.
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

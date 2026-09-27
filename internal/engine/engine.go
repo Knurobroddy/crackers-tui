@@ -1,5 +1,5 @@
-// Package engine installs and removes modpacks (ADR §5). The marker file in
-// the game root is the only persisted state.
+// Package engine installs and removes modpacks. The marker file in the game
+// root is the only persisted state.
 package engine
 
 import (
@@ -35,9 +35,6 @@ type Event struct {
 // running the operation.
 type ProgressFunc func(Event)
 
-// ErrNothingToRemove is returned by Remove when there is no marker.
-var ErrNothingToRemove = errors.New("nothing to remove: no pack is installed")
-
 // Source is where the engine gets pack manifests and files from.
 type Source interface {
 	FetchManifest(ctx context.Context, ref string) (*remote.Manifest, string, error)
@@ -67,18 +64,6 @@ type InstallRequest struct {
 	CleanLeftovers bool
 }
 
-// PermissionError is returned when the OS refuses a write.
-type PermissionError struct {
-	Path string
-	Err  error
-}
-
-func (p *PermissionError) Error() string {
-	return fmt.Sprintf("Permission denied writing to %s. On Windows try running as administrator.", p.Path)
-}
-
-func (p *PermissionError) Unwrap() error { return p.Err }
-
 // fsErr turns permission errors into a PermissionError naming path.
 func fsErr(path string, err error) error {
 	if err != nil && errors.Is(err, fs.ErrPermission) {
@@ -87,13 +72,15 @@ func fsErr(path string, err error) error {
 	return err
 }
 
-func emitter(p ProgressFunc) ProgressFunc {
-	if p == nil {
-		return func(Event) {}
+func emitter(progress ProgressFunc) ProgressFunc {
+	if progress == nil {
+		return discardEvent
 	}
-	return p
+	return progress
 }
 
-func step(p ProgressFunc, format string, args ...any) {
-	p(Event{Kind: EventStep, Message: fmt.Sprintf(format, args...)})
+func discardEvent(Event) {}
+
+func step(emit ProgressFunc, format string, args ...any) {
+	emit(Event{Kind: EventStep, Message: fmt.Sprintf(format, args...)})
 }

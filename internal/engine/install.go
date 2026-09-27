@@ -22,381 +22,500 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
 )
 
-// journal records everything written so a failed install can be rolled back.
-type journal struct {
+// writeProgressEvery is how many written files share one progress step.
+const writeProgressEvery = 25
+
+// installJournal records everything written so a failed install can be rolled
+// back.
+type installJournal struct {
 	files  []string          // rel paths of files renamed into place
 	hashes map[string]string // rel path -> SHA-256 of the pack's content
 	dirs   []string          // rel paths of directories created, parents first
 	undo   []hooks.UndoAction
-	tmp    string // abs path of a tmp file currently being written
+	// oldHooksUndone is set once the previous pack's hook changes are undone;
+	// a rollback after that cannot bring them back.
+	oldHooksUndone bool
 }
 
-// prepared is a pack after pre-flight, download and planning: everything is
-// verified, nothing in the game dir has been touched.
-type prepared struct {
-	m            *remote.Manifest
+func newInstallJournal() *installJournal {
+	return &installJournal{hashes: map[string]string{}}
+}
+
+// preparedPack is a pack after pre-flight, download and planning: everything
+// is verified, nothing in the game dir has been touched.
+type preparedPack struct {
+	manifest     *remote.Manifest
 	manifestHash string
 	ownedDirs    []string
 	preserve     []string
 	plan         *plan
-	active       []hooks.Hook
-	hctx         hooks.HookCtx
-	tmpDir       string
+	activeHooks  []hooks.Hook
+	hookCtx      hooks.HookCtx
+	tempDir      string
 }
 
-func (p *prepared) close() {
+func (p *preparedPack) close() {
 	if p.plan != nil {
 		p.plan.Close()
 	}
-	os.RemoveAll(p.tmpDir)
+	_ = os.RemoveAll(p.tempDir)
 }
 
-// prepare runs pre-flight, downloads and verifies every file and expands the
-// plan (which validates every zip entry). Hooks are validated only when
-// withHooks is set (installs; leftover cleanup does not run hooks).
-func (e *Engine) prepare(ctx context.Context, req InstallRequest, emit ProgressFunc, withHooks bool) (_ *prepared, err error) {
-	root := req.Game.RootDir
-	step(emit, "Fetching pack manifest…")
-	m, manifestHash, err := e.source.FetchManifest(ctx, req.Pack.Manifest)
-	if err != nil {
-		return nil, err
-	}
-	if m.ID != req.Pack.ID || m.GameID != req.Game.GameID {
-		return nil, fmt.Errorf("pack error: manifest is for pack %q / game %q, expected %q / %q", m.ID, m.GameID, req.Pack.ID, req.Game.GameID)
-	}
-	step(emit, "Checking pack…")
-	ownedDirs, err := cleanRelPaths("owned_dirs", root, m.OwnedDirs)
-	if err != nil {
-		return nil, err
-	}
-	preserve, err := cleanRelPaths("preserve", root, m.Preserve)
-	if err != nil {
-		return nil, err
-	}
-	files := m.EffectiveFiles(req.FilesKey)
-	for _, fe := range files {
-		if err := checkDest(root, fe); err != nil {
-			return nil, err
-		}
-	}
-	hctx := hooks.HookCtx{GameID: req.Game.GameID, BuildID: req.Game.BuildID, RootDir: root, Extra: req.Game.Extra}
-	var active []hooks.Hook
-	for _, spec := range m.Hooks {
-		h, err := hooks.New(spec.Type, spec.Raw)
-		if err != nil {
-			return nil, err
-		}
-		if !withHooks || !spec.AppliesTo(req.Game.BuildID) {
-			continue
-		}
-		if err := h.Validate(hctx); err != nil {
-			return nil, err
-		}
-		active = append(active, h)
-	}
-
-	tmpDir, err := os.MkdirTemp("", config.AppSlug+"-*")
-	if err != nil {
-		return nil, err
-	}
-	pr := &prepared{m: m, manifestHash: manifestHash, ownedDirs: ownedDirs, preserve: preserve, active: active, hctx: hctx, tmpDir: tmpDir}
-	defer func() {
-		if err != nil {
-			pr.close()
-		}
-	}()
-	downloaded := make([]string, len(files))
-	for i, fe := range files {
-		name := displayName(fe.URL)
-		step(emit, "Downloading %s (%d/%d)…", name, i+1, len(files))
-		downloaded[i] = filepath.Join(tmpDir, fmt.Sprintf("%04d", i))
-		err := e.source.Download(ctx, fe, downloaded[i], func(done, total int64) {
-			emit(Event{Kind: EventDownload, File: name, Index: i + 1, Count: len(files), Done: done, Total: total})
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	step(emit, "Preparing files…")
-	if pr.plan, err = buildPlan(root, files, downloaded); err != nil {
-		return nil, err
-	}
-	return pr, nil
+type downloadProgress struct {
+	emit         ProgressFunc
+	name         string
+	index, count int
 }
 
-// Install installs a pack (ADR §5.3). If a pack is already installed it is
-// replaced; the UI must have confirmed that.
-//
-// Order: pre-flight, download + verify every file, expand the plan (which
-// validates every zip entry), then move an installed pack aside (see
-// staging), check for leftovers, write files, keep the user's preserved files
-// (same pack only), undo the old pack's hooks, run the new hooks and write the
-// marker last. Nothing in the game dir is touched before all downloads are
-// verified and all paths are validated. Any failure rolls back and moves the
-// old pack back; only its hook changes are lost if the failure comes after
-// they were undone.
+func (p downloadProgress) report(done, total int64) {
+	p.emit(Event{Kind: EventDownload, File: p.name, Index: p.index, Count: p.count, Done: done, Total: total})
+}
+
+// Install installs a pack, replacing an installed one. Nothing in the game
+// dir changes before every download is verified and every path validated; any
+// later failure rolls back and restores the previous pack.
 //
 // Leftovers are files the pack would write, or folders it owns, that already
 // exist and do not belong to the installed pack (e.g. from an earlier manual
 // mod install). They fail the install with a *LeftoversError unless
 // req.CleanLeftovers is set, in which case they are deleted first.
-func (e *Engine) Install(ctx context.Context, req InstallRequest, progress ProgressFunc) (err error) {
+func (e *Engine) Install(ctx context.Context, req InstallRequest, progress ProgressFunc) error {
 	emit := emitter(progress)
 	root := req.Game.RootDir
-	log := slog.With("pack", req.Pack.ID, "root", root)
-	log.Info("install started", "build", req.Game.BuildID, "clean_leftovers", req.CleanLeftovers)
-	defer func() {
-		if err != nil {
-			log.Error("install failed", "err", err)
-		} else {
-			log.Info("install finished")
-		}
-	}()
-
 	if err := e.recoverStaging(root); err != nil {
-		return fmt.Errorf("could not clean up after an interrupted install: %w", err)
+		return fmt.Errorf("recover interrupted install: %w", err)
 	}
-	pr, err := e.prepare(ctx, req, emit, true)
+	prepared, err := e.prepare(ctx, req, emit)
 	if err != nil {
 		return err
 	}
-	defer pr.close()
-
-	// Move the installed pack, if any, aside.
-	var st *staging
-	if _, err := os.Lstat(MarkerPath(root)); err == nil {
-		step(emit, "Moving the installed pack aside…")
-		if st, err = e.stage(root); err != nil {
-			return fmt.Errorf("could not move the currently installed pack aside: %w", err)
-		}
-	}
-	left, err := pr.plan.leftovers(root, pr.ownedDirs)
-	if err == nil && len(left) > 0 {
-		if !req.CleanLeftovers {
-			err = &LeftoversError{Root: root, Paths: left}
-		} else {
-			step(emit, "Removing leftover mod files…")
-			err = e.removeLeftovers(root, left)
-		}
-	}
+	defer prepared.close()
+	stagedPack, err := e.stageInstalledPack(root, emit)
 	if err != nil {
-		if st != nil {
-			if rErr := st.restore(); rErr != nil {
-				return fmt.Errorf("%w\n\nMoving the installed pack back also had errors:\n%v", err, rErr)
-			}
-		}
 		return err
 	}
-
-	// Write files, run hooks, write the marker last; roll back on any error.
-	j := &journal{hashes: map[string]string{}}
-	oldUndone := false
-	err = e.applyFiles(ctx, root, pr.plan, j, emit)
-	if err == nil && st != nil && st.old.PackID == pr.m.ID {
-		err = e.keepUserFiles(st, pr.preserve, j)
+	if err := e.handleLeftovers(req, prepared, emit); err != nil {
+		return restoreAfter(stagedPack, err)
 	}
-	if err == nil && st != nil && len(st.old.Undo) > 0 {
-		oldUndone = true
-		err = runUndo(st.old.Undo)
+	journal := newInstallJournal()
+	if err := e.writePack(ctx, req, prepared, stagedPack, journal, emit); err != nil {
+		return e.abortInstall(root, journal, stagedPack, err)
 	}
-	if err == nil {
-		err = e.applyHooks(pr.active, pr.hctx, j, emit)
-	}
-	if err == nil {
-		step(emit, "Finishing…")
-		err = e.commit(root, pr.m, pr.manifestHash, req.Game.BuildID, pr.ownedDirs, j)
-	}
-	if err != nil {
-		var rbErrs []error
-		if rbErr := e.rollback(root, j); rbErr != nil {
-			rbErrs = append(rbErrs, rbErr)
-		}
-		if st != nil {
-			if rErr := st.restore(); rErr != nil {
-				rbErrs = append(rbErrs, rErr)
-			}
-		}
-		if oldUndone {
-			err = fmt.Errorf("%w\n\nThe previous pack's files were put back, but its game settings were already undone; reinstall it to fix that.", err)
-		}
-		if len(rbErrs) > 0 {
-			return fmt.Errorf("%w\n\nRollback also had errors:\n%v", err, errors.Join(rbErrs...))
-		}
-		return err
-	}
-	if st != nil {
-		if err := st.discard(); err != nil {
-			log.Warn("could not delete the previous pack's files", "err", err)
-		}
-	}
+	e.discardStaged(stagedPack)
 	return nil
 }
 
-// commit writes the marker (step 10).
-func (e *Engine) commit(root string, m *remote.Manifest, manifestHash, buildID string, ownedDirs []string, j *journal) error {
-	mk := &Marker{
-		SchemaVersion:  config.MarkerSchemaVersion,
-		AppVersion:     e.appVersion,
-		PackID:         m.ID,
-		PackName:       m.Name,
-		PackVersion:    m.Version,
-		ManifestSHA256: manifestHash,
-		BuildID:        buildID,
-		InstalledAt:    time.Now().UTC().Truncate(time.Second),
-		Files:          nonNil(j.files),
-		FileSHA256:     j.hashes,
-		DirsCreated:    nonNil(j.dirs),
-		OwnedDirs:      nonNil(ownedDirs),
-		Undo:           j.undo,
+// prepare fetches and checks the manifest, validates the hooks that apply to
+// the build, downloads and verifies every file and expands the plan (which
+// validates every zip entry).
+func (e *Engine) prepare(ctx context.Context, req InstallRequest, emit ProgressFunc) (*preparedPack, error) {
+	prepared, err := e.fetchCheckedManifest(ctx, req, emit)
+	if err != nil {
+		return nil, err
 	}
-	if mk.Undo == nil {
-		mk.Undo = []hooks.UndoAction{}
+	prepared.hookCtx = hooks.HookCtx{GameID: req.Game.GameID, BuildID: req.Game.BuildID, RootDir: req.Game.RootDir, Extra: req.Game.Extra}
+	if prepared.activeHooks, err = activeHooks(prepared.manifest, req, prepared.hookCtx); err != nil {
+		return nil, err
 	}
-	if err := writeMarker(e.files, root, mk); err != nil {
-		return err
+	if err := e.downloadPack(ctx, req, prepared, emit); err != nil {
+		return nil, err
 	}
-	slog.Info("marker written", "path", MarkerPath(root), "files", len(mk.Files), "dirs_created", len(mk.DirsCreated), "undo", len(mk.Undo))
-	return nil
+	return prepared, nil
 }
 
-// applyFiles performs step 6: directories and files in plan order.
-func (e *Engine) applyFiles(ctx context.Context, root string, p *plan, j *journal, emit ProgressFunc) error {
-	for _, d := range p.Dirs {
-		if err := e.ensureDir(root, d, j); err != nil {
+// prepareFiles is prepare without hook validation, for leftover cleanup,
+// which runs no hooks. Hook types are still checked.
+func (e *Engine) prepareFiles(ctx context.Context, req InstallRequest, emit ProgressFunc) (*preparedPack, error) {
+	prepared, err := e.fetchCheckedManifest(ctx, req, emit)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkHookTypes(prepared.manifest); err != nil {
+		return nil, err
+	}
+	if err := e.downloadPack(ctx, req, prepared, emit); err != nil {
+		return nil, err
+	}
+	return prepared, nil
+}
+
+// fetchCheckedManifest fetches the manifest and validates everything in it
+// that does not need the downloads: its pack and game, owned_dirs, preserve
+// and every destination path.
+func (e *Engine) fetchCheckedManifest(ctx context.Context, req InstallRequest, emit ProgressFunc) (*preparedPack, error) {
+	root := req.Game.RootDir
+	step(emit, "Fetching pack manifest…")
+	manifest, manifestHash, err := e.source.FetchManifest(ctx, req.Pack.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	if manifest.ID != req.Pack.ID || manifest.GameID != req.Game.GameID {
+		return nil, fmt.Errorf("manifest mismatch: got pack %q game %q, want %q %q", manifest.ID, manifest.GameID, req.Pack.ID, req.Game.GameID)
+	}
+	step(emit, "Checking pack…")
+	ownedDirs, err := cleanRelPaths("owned_dirs", root, manifest.OwnedDirs)
+	if err != nil {
+		return nil, err
+	}
+	preserve, err := cleanRelPaths("preserve", root, manifest.Preserve)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDestinations(root, manifest.EffectiveFiles(req.FilesKey)); err != nil {
+		return nil, err
+	}
+	return &preparedPack{manifest: manifest, manifestHash: manifestHash, ownedDirs: ownedDirs, preserve: preserve}, nil
+}
+
+func validateDestinations(root string, entries []remote.FileEntry) error {
+	for _, entry := range entries {
+		if err := checkDest(root, entry); err != nil {
 			return err
 		}
 	}
-	for i, f := range p.Files {
+	return nil
+}
+
+// activeHooks creates every hook of the manifest and validates the ones that
+// apply to the build.
+func activeHooks(manifest *remote.Manifest, req InstallRequest, hookCtx hooks.HookCtx) ([]hooks.Hook, error) {
+	var active []hooks.Hook
+	for _, spec := range manifest.Hooks {
+		hook, err := hooks.New(spec.Type, spec.Raw)
+		if err != nil {
+			return nil, err
+		}
+		if !spec.AppliesTo(req.Game.BuildID) {
+			continue
+		}
+		if err := hook.Validate(hookCtx); err != nil {
+			return nil, err
+		}
+		active = append(active, hook)
+	}
+	return active, nil
+}
+
+// checkHookTypes fails on a hook type this version does not know.
+func checkHookTypes(manifest *remote.Manifest) error {
+	for _, spec := range manifest.Hooks {
+		if _, err := hooks.New(spec.Type, spec.Raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// downloadPack downloads every file into a new temp dir and builds the plan.
+// On error the temp dir is deleted.
+func (e *Engine) downloadPack(ctx context.Context, req InstallRequest, prepared *preparedPack, emit ProgressFunc) error {
+	tempDir, err := os.MkdirTemp("", config.AppSlug+"-*")
+	if err != nil {
+		return err
+	}
+	prepared.tempDir = tempDir
+	entries := prepared.manifest.EffectiveFiles(req.FilesKey)
+	downloaded, err := e.downloadAll(ctx, entries, tempDir, emit)
+	if err != nil {
+		prepared.close()
+		return err
+	}
+	step(emit, "Preparing files…")
+	if prepared.plan, err = buildPlan(req.Game.RootDir, entries, downloaded); err != nil {
+		prepared.close()
+		return err
+	}
+	return nil
+}
+
+// downloadAll downloads entries[i] to tempDir and returns the local paths.
+func (e *Engine) downloadAll(ctx context.Context, entries []remote.FileEntry, tempDir string, emit ProgressFunc) ([]string, error) {
+	downloaded := make([]string, len(entries))
+	for i, entry := range entries {
+		name := displayName(entry.URL)
+		step(emit, "Downloading %s (%d/%d)…", name, i+1, len(entries))
+		downloaded[i] = filepath.Join(tempDir, fmt.Sprintf("%04d", i))
+		progress := downloadProgress{emit: emit, name: name, index: i + 1, count: len(entries)}
+		if err := e.source.Download(ctx, entry, downloaded[i], progress.report); err != nil {
+			return nil, err
+		}
+	}
+	return downloaded, nil
+}
+
+// stageInstalledPack moves the installed pack, if any, aside. It returns nil
+// when no pack is installed.
+func (e *Engine) stageInstalledPack(root string, emit ProgressFunc) (*staging, error) {
+	if _, err := os.Lstat(MarkerPath(root)); err != nil {
+		return nil, nil
+	}
+	step(emit, "Moving the installed pack aside…")
+	stagedPack, err := e.stage(root)
+	if err != nil {
+		return nil, fmt.Errorf("stage installed pack: %w", err)
+	}
+	return stagedPack, nil
+}
+
+// handleLeftovers fails with a *LeftoversError, or deletes the leftovers when
+// the request allows it.
+func (e *Engine) handleLeftovers(req InstallRequest, prepared *preparedPack, emit ProgressFunc) error {
+	root := req.Game.RootDir
+	leftovers, err := prepared.plan.leftovers(root, prepared.ownedDirs)
+	if err != nil {
+		return err
+	}
+	if len(leftovers) == 0 {
+		return nil
+	}
+	if !req.CleanLeftovers {
+		return &LeftoversError{Root: root, Paths: leftovers}
+	}
+	step(emit, "Removing leftover mod files…")
+	return e.removeLeftovers(root, leftovers)
+}
+
+// restoreAfter moves a staged pack back after err and returns err, joined
+// with the restore failure if there is one.
+func restoreAfter(stagedPack *staging, err error) error {
+	if stagedPack == nil {
+		return err
+	}
+	if restoreErr := stagedPack.restore(); restoreErr != nil {
+		return errors.Join(err, ErrRollbackIncomplete, restoreErr)
+	}
+	return err
+}
+
+// writePack writes the files, keeps the user's preserved files (same pack
+// only), undoes the old pack's hooks, runs the new hooks and writes the
+// marker last.
+func (e *Engine) writePack(ctx context.Context, req InstallRequest, prepared *preparedPack, stagedPack *staging, journal *installJournal, emit ProgressFunc) error {
+	root := req.Game.RootDir
+	if err := e.applyFiles(ctx, root, prepared.plan, journal, emit); err != nil {
+		return err
+	}
+	if stagedPack != nil && stagedPack.old.PackID == prepared.manifest.ID {
+		if err := e.keepUserFiles(stagedPack, prepared.preserve, journal); err != nil {
+			return err
+		}
+	}
+	if err := undoOldHooks(stagedPack, journal); err != nil {
+		return err
+	}
+	if err := e.applyHooks(prepared.activeHooks, prepared.hookCtx, journal, emit); err != nil {
+		return err
+	}
+	step(emit, "Finishing…")
+	return e.commit(root, prepared, req.Game.BuildID, journal)
+}
+
+func undoOldHooks(stagedPack *staging, journal *installJournal) error {
+	if stagedPack == nil || len(stagedPack.old.Undo) == 0 {
+		return nil
+	}
+	journal.oldHooksUndone = true
+	return runUndo(stagedPack.old.Undo)
+}
+
+// abortInstall rolls back the journal, moves the staged pack back and returns
+// err joined with what could not be undone.
+func (e *Engine) abortInstall(root string, journal *installJournal, stagedPack *staging, err error) error {
+	var rollbackErrs []error
+	if rollbackErr := e.rollback(root, journal); rollbackErr != nil {
+		rollbackErrs = append(rollbackErrs, rollbackErr)
+	}
+	if stagedPack != nil {
+		if restoreErr := stagedPack.restore(); restoreErr != nil {
+			rollbackErrs = append(rollbackErrs, restoreErr)
+		}
+	}
+	errs := []error{err}
+	if journal.oldHooksUndone {
+		errs = append(errs, ErrPreviousHooksUndone)
+	}
+	if len(rollbackErrs) > 0 {
+		errs = append(append(errs, ErrRollbackIncomplete), rollbackErrs...)
+	}
+	if len(errs) == 1 {
+		return err
+	}
+	return errors.Join(errs...)
+}
+
+func (e *Engine) discardStaged(stagedPack *staging) {
+	if stagedPack == nil {
+		return
+	}
+	if err := stagedPack.discard(); err != nil {
+		slog.Warn("delete staged pack", "path", stagedPack.dir, "err", err)
+	}
+}
+
+func (e *Engine) commit(root string, prepared *preparedPack, buildID string, journal *installJournal) error {
+	manifest := prepared.manifest
+	marker := &Marker{
+		SchemaVersion:  config.MarkerSchemaVersion,
+		AppVersion:     e.appVersion,
+		PackID:         manifest.ID,
+		PackName:       manifest.Name,
+		PackVersion:    manifest.Version,
+		ManifestSHA256: prepared.manifestHash,
+		BuildID:        buildID,
+		InstalledAt:    time.Now().UTC().Truncate(time.Second),
+		Files:          nonNil(journal.files),
+		FileSHA256:     journal.hashes,
+		DirsCreated:    nonNil(journal.dirs),
+		OwnedDirs:      nonNil(prepared.ownedDirs),
+		Undo:           journal.undo,
+	}
+	if marker.Undo == nil {
+		marker.Undo = []hooks.UndoAction{}
+	}
+	if err := writeMarker(e.files, root, marker); err != nil {
+		return err
+	}
+	slog.Debug("write marker", "path", MarkerPath(root))
+	return nil
+}
+
+// applyFiles creates the plan's directories, then writes its files in order.
+func (e *Engine) applyFiles(ctx context.Context, root string, p *plan, journal *installJournal, emit ProgressFunc) error {
+	for _, dir := range p.Dirs {
+		if err := e.ensureDir(root, dir, journal); err != nil {
+			return err
+		}
+	}
+	for i, file := range p.Files {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if i%25 == 0 || i == len(p.Files)-1 {
+		if i%writeProgressEvery == 0 || i == len(p.Files)-1 {
 			step(emit, "Writing files (%d/%d)…", i+1, len(p.Files))
 		}
-		if dir := path.Dir(f.Rel); dir != "." {
-			if err := e.ensureDir(root, dir, j); err != nil {
+		if dir := path.Dir(file.Rel); dir != "." {
+			if err := e.ensureDir(root, dir, journal); err != nil {
 				return err
 			}
 		}
-		if err := e.writePlanFile(f, j); err != nil {
+		if err := e.writePlanFile(file, journal); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// applyHooks performs step 9: runs the hooks, journaling their undo actions.
-func (e *Engine) applyHooks(active []hooks.Hook, hctx hooks.HookCtx, j *journal, emit ProgressFunc) error {
+// applyHooks runs the hooks, journaling their undo actions.
+func (e *Engine) applyHooks(active []hooks.Hook, hookCtx hooks.HookCtx, journal *installJournal, emit ProgressFunc) error {
 	if len(active) > 0 {
 		step(emit, "Applying game settings…")
 	}
-	for _, h := range active {
-		undo, err := h.Apply(hctx)
+	for _, hook := range active {
+		undo, err := hook.Apply(hookCtx)
 		if err != nil {
 			return err
 		}
-		j.undo = append(j.undo, undo...)
+		journal.undo = append(journal.undo, undo...)
 	}
 	return nil
 }
 
 // ensureDir creates rel (and its parents) below root, journaling each
 // directory it creates. Existing non-directories (including symlinks) fail.
-func (e *Engine) ensureDir(root, rel string, j *journal) error {
-	cur, acc := root, ""
+func (e *Engine) ensureDir(root, rel string, journal *installJournal) error {
+	current, currentRel := root, ""
 	for _, part := range strings.Split(rel, "/") {
-		acc = path.Join(acc, part)
-		cur = filepath.Join(cur, part)
-		fi, err := os.Lstat(cur)
+		currentRel = path.Join(currentRel, part)
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
 		if err == nil {
-			if !fi.IsDir() {
-				return fmt.Errorf("cannot create directory %s: a file or link with that name exists", cur)
+			if !info.IsDir() {
+				return fmt.Errorf("create directory %s: path exists and is not a directory", current)
 			}
 			continue
 		}
 		if !os.IsNotExist(err) {
-			return fsErr(cur, err)
+			return fsErr(current, err)
 		}
-		if err := e.files.Mkdir(cur, 0o755); err != nil {
-			return fsErr(cur, err)
+		if err := e.files.Mkdir(current, dirPerm); err != nil {
+			return fsErr(current, err)
 		}
-		j.dirs = append(j.dirs, acc)
-		slog.Info("created directory", "path", cur)
+		journal.dirs = append(journal.dirs, currentRel)
+		slog.Debug("create directory", "path", current)
 	}
 	return nil
 }
 
-// writePlanFile writes f to <target>.modinst-tmp and renames it into place.
-func (e *Engine) writePlanFile(f planFile, j *journal) (err error) {
-	tmp := f.Abs + config.TmpSuffix
-	j.tmp = tmp
-	defer func() {
-		if err != nil {
-			_ = e.files.Remove(tmp)
-		}
-		j.tmp = ""
-	}()
-	src, err := f.open()
+// writePlanFile writes file to <target>.modinst-tmp and renames it into
+// place, so the target is never partly written.
+func (e *Engine) writePlanFile(file planFile, journal *installJournal) error {
+	tempPath := file.Abs + config.TmpSuffix
+	sum, err := e.writePlanFileTemp(file, tempPath)
 	if err != nil {
-		return fmt.Errorf("cannot read %s from the pack: %w", f.Rel, err)
+		_ = e.files.Remove(tempPath)
+		return err
 	}
-	defer src.Close()
-	out, err := e.files.Create(tmp, f.Mode)
+	if err := e.files.Rename(tempPath, file.Abs); err != nil {
+		_ = e.files.Remove(tempPath)
+		return fsErr(file.Abs, err)
+	}
+	journal.files = append(journal.files, file.Rel)
+	journal.hashes[file.Rel] = sum
+	slog.Debug("write file", "path", file.Abs)
+	return nil
+}
+
+// writePlanFileTemp copies file's content to tempPath and returns its hex
+// SHA-256.
+func (e *Engine) writePlanFileTemp(file planFile, tempPath string) (string, error) {
+	src, err := file.open()
 	if err != nil {
-		return fsErr(f.Abs, err)
+		return "", fmt.Errorf("open %s in pack: %w", file.Rel, err)
 	}
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(out, h), src); err != nil {
-		out.Close()
-		return fmt.Errorf("cannot write %s: %w", f.Abs, fsErr(f.Abs, err))
+	defer func() { _ = src.Close() }()
+	out, err := e.files.Create(tempPath, file.Mode)
+	if err != nil {
+		return "", fsErr(file.Abs, err)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(out, hash), src); err != nil {
+		_ = out.Close()
+		return "", fmt.Errorf("write %s: %w", file.Abs, fsErr(file.Abs, err))
 	}
 	if err := out.Close(); err != nil {
-		return fsErr(f.Abs, err)
+		return "", fsErr(file.Abs, err)
 	}
 	if runtime.GOOS != "windows" {
-		if err := e.files.Chmod(tmp, f.Mode); err != nil { // not subject to umask
-			return fsErr(f.Abs, err)
+		// Create's mode is subject to the umask; Chmod's is not.
+		if err := e.files.Chmod(tempPath, file.Mode); err != nil {
+			return "", fsErr(file.Abs, err)
 		}
 	}
-	if err := e.files.Rename(tmp, f.Abs); err != nil {
-		return fsErr(f.Abs, err)
-	}
-	j.files = append(j.files, f.Rel)
-	j.hashes[f.Rel] = hex.EncodeToString(h.Sum(nil))
-	slog.Info("wrote file", "path", f.Abs)
-	return nil
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // rollback undoes a journal: delete written files, run undo actions in
 // reverse, then remove created directories that are empty, deepest first.
-func (e *Engine) rollback(root string, j *journal) error {
-	slog.Warn("rolling back", "files", len(j.files), "dirs", len(j.dirs), "undo", len(j.undo))
+func (e *Engine) rollback(root string, journal *installJournal) error {
+	slog.Warn("roll back install", "path", root)
 	var errs []error
-	if j.tmp != "" {
-		_ = e.files.Remove(j.tmp)
-	}
-	for i := len(j.files) - 1; i >= 0; i-- {
-		p := filepath.Join(root, filepath.FromSlash(j.files[i]))
-		if err := e.files.Remove(p); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fsErr(p, err))
+	for i := len(journal.files) - 1; i >= 0; i-- {
+		file := filepath.Join(root, filepath.FromSlash(journal.files[i]))
+		if err := e.files.Remove(file); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fsErr(file, err))
 		}
 	}
-	if err := runUndo(j.undo); err != nil {
+	if err := runUndo(journal.undo); err != nil {
 		errs = append(errs, err)
 	}
-	for i := len(j.dirs) - 1; i >= 0; i-- {
-		if err := removeIfEmpty(e.files, filepath.Join(root, filepath.FromSlash(j.dirs[i]))); err != nil {
+	for i := len(journal.dirs) - 1; i >= 0; i-- {
+		if err := removeIfEmpty(e.files, filepath.Join(root, filepath.FromSlash(journal.dirs[i]))); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	err := errors.Join(errs...)
-	if err != nil {
-		slog.Error("rollback errors", "err", err)
-	}
-	return err
+	return errors.Join(errs...)
 }
 
-// removeIfEmpty removes dir if it exists and is empty.
 func removeIfEmpty(files FileWriter, dir string) error {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -429,26 +548,26 @@ func runUndo(undo []hooks.UndoAction) error {
 // (owned_dirs, preserve); none may be the game root itself.
 func cleanRelPaths(field, root string, paths []string) ([]string, error) {
 	out := make([]string, 0, len(paths))
-	for _, d := range paths {
-		c, err := pathsafe.Clean(d)
+	for _, rel := range paths {
+		cleaned, err := pathsafe.Clean(rel)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", field, err)
+			return nil, fmt.Errorf("check %s: %w", field, err)
 		}
-		if _, err := pathsafe.JoinNotRoot(root, c); err != nil {
-			return nil, fmt.Errorf("%s: %w", field, err)
+		if _, err := pathsafe.JoinNotRoot(root, cleaned); err != nil {
+			return nil, fmt.Errorf("check %s: %w", field, err)
 		}
-		out = append(out, c)
+		out = append(out, cleaned)
 	}
 	return out, nil
 }
 
 // checkDest validates a manifest dest before anything is downloaded.
-func checkDest(root string, fe remote.FileEntry) error {
-	if fe.Kind == remote.KindFile {
-		_, err := pathsafe.JoinNotRoot(root, fe.Dest)
+func checkDest(root string, entry remote.FileEntry) error {
+	if entry.Kind == remote.KindFile {
+		_, err := pathsafe.JoinNotRoot(root, entry.Dest)
 		return err
 	}
-	_, err := pathsafe.Join(root, fe.Dest)
+	_, err := pathsafe.Join(root, entry.Dest)
 	return err
 }
 
@@ -457,28 +576,28 @@ func checkDest(root string, fe remote.FileEntry) error {
 // (e.g. ".../BepInExPack_Valheim/5.4.2202/"), or host/segment as a fallback
 // (e.g. "drive.google.com/uc").
 func displayName(rawURL string) string {
-	u, err := url.Parse(rawURL)
+	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL
 	}
-	var segs []string
-	for _, s := range strings.Split(u.Path, "/") {
-		if s != "" {
-			segs = append(segs, s)
+	var segments []string
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment != "" {
+			segments = append(segments, segment)
 		}
 	}
-	switch n := len(segs); {
+	switch n := len(segments); {
 	case n == 0:
-		return u.Host
-	case !isVersion(segs[n-1]) && strings.Contains(segs[n-1], "."):
-		return segs[n-1]
+		return parsed.Host
+	case !isVersion(segments[n-1]) && strings.Contains(segments[n-1], "."):
+		return segments[n-1]
 	case n >= 2:
-		return segs[n-2] + " " + segs[n-1]
+		return segments[n-2] + " " + segments[n-1]
 	default:
-		return u.Host + "/" + segs[0]
+		return parsed.Host + "/" + segments[0]
 	}
 }
 
-func isVersion(s string) bool {
-	return strings.Trim(s, "0123456789.") == ""
+func isVersion(segment string) bool {
+	return strings.Trim(segment, "0123456789.") == ""
 }

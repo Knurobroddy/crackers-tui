@@ -12,7 +12,8 @@ var errInjected = errors.New("injected failure")
 
 // faultyFiles is OSFiles that fails (or panics, to simulate a crash) on the
 // nth call of op whose path contains pathMatch. For Rename the old path is
-// matched, so ".modinst-tmp" selects file writes and "-old" selects staging.
+// matched, so ".modinst-tmp" selects file writes and "-old" selects moves
+// back out of the staging folder (restoreStaged), not staging itself.
 type faultyFiles struct {
 	OSFiles
 	op        string // "mkdir", "create", "rename", "remove", "removeall", ...

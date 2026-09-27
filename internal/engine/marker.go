@@ -12,9 +12,9 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
 )
 
-// Marker is <RootDir>/.crackers-modinst.json (ADR §5.1). Paths in Files,
-// DirsCreated and OwnedDirs are relative to the root with forward slashes;
-// paths inside Undo are absolute.
+// Marker is <RootDir>/.crackers-modinst.json. Paths in Files, DirsCreated and
+// OwnedDirs are relative to the root with forward slashes; paths inside Undo
+// are absolute.
 type Marker struct {
 	SchemaVersion  int                `json:"schema_version"`
 	AppVersion     string             `json:"app_version"`
@@ -39,29 +39,29 @@ func MarkerPath(root string) string {
 // ReadMarker reads the marker. A missing marker returns an error for which
 // os.IsNotExist / errors.Is(err, fs.ErrNotExist) is true.
 func ReadMarker(root string) (*Marker, error) {
-	p := MarkerPath(root)
-	b, err := os.ReadFile(p)
+	markerPath := MarkerPath(root)
+	raw, err := os.ReadFile(markerPath)
 	if err != nil {
 		return nil, err
 	}
-	var m Marker
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, fmt.Errorf("marker %s is unreadable: %w", p, err)
+	var marker Marker
+	if err := json.Unmarshal(raw, &marker); err != nil {
+		return nil, fmt.Errorf("parse marker %s: %w", markerPath, err)
 	}
-	if err := remote.CheckSchema("marker "+p, m.SchemaVersion, config.MarkerSchemaVersion); err != nil {
+	if err := remote.CheckSchema("marker "+markerPath, marker.SchemaVersion, config.MarkerSchemaVersion); err != nil {
 		return nil, err
 	}
-	return &m, nil
+	return &marker, nil
 }
 
-// writeMarker writes the marker via a tmp file and rename.
-func writeMarker(files FileWriter, root string, m *Marker) error {
-	b, err := json.MarshalIndent(m, "", "  ")
+// writeMarker writes the marker via a temp file and rename.
+func writeMarker(files FileWriter, root string, marker *Marker) error {
+	raw, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return err
 	}
-	p := MarkerPath(root)
-	return fsErr(p, writeAtomic(files, p, append(b, '\n'), 0o644))
+	markerPath := MarkerPath(root)
+	return fsErr(markerPath, writeAtomic(files, markerPath, append(raw, '\n'), filePerm))
 }
 
 func nonNil(s []string) []string {

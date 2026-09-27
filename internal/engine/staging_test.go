@@ -6,14 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 )
 
 // otherPack publishes a second pack for the same game that owns BepInEx.
-func otherPack(t *testing.T, r *fakeRemote, extra ...map[string]any) map[string]any {
+func otherPack(r *fakeRemote, extra ...map[string]any) map[string]any {
 	other := []byte("other pack")
 	r.put("files/other.dll", other)
 	files := []any{entry("files/other.dll", other, "file", "BepInEx/plugins/other.dll", "")}
@@ -51,7 +50,7 @@ func TestEngine_Install_reinstallOrSwitchFails_keepsOldPack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newFakeRemote(t)
 			packA := r.publish(t, packID, defaultManifest(t, r))
-			packB := r.publish(t, "valheim-other", otherPack(t, r))
+			packB := r.publish(t, "valheim-other", otherPack(r))
 			g := newFakeGame(t, true)
 			e := New(r.client(), "0.1.0", OSFiles{})
 			ctx := context.Background()
@@ -69,8 +68,8 @@ func TestEngine_Install_reinstallOrSwitchFails_keepsOldPack(t *testing.T) {
 			if !errors.Is(err, errInjected) {
 				t.Fatalf("err = %v, want injected failure", err)
 			}
-			if got := strings.Contains(err.Error(), "reinstall"); got != tc.hooksLost {
-				t.Errorf("error mentions reinstall = %v, want %v: %v", got, tc.hooksLost, err)
+			if got := errors.Is(err, ErrPreviousHooksUndone); got != tc.hooksLost {
+				t.Errorf("errors.Is(err, ErrPreviousHooksUndone) = %v, want %v: %v", got, tc.hooksLost, err)
 			}
 			after := snapshot(t, g.lib)
 			if tc.hooksLost { // user.reg and its backup are compared by the hook tests
@@ -89,12 +88,12 @@ func TestEngine_Install_reinstallOrSwitchFails_keepsOldPack(t *testing.T) {
 	}
 }
 
-func TestLeftoversOnSwitchKeepOldPack(t *testing.T) {
+func TestEngine_Install_switchWithLeftovers_keepsOldPackUntilConfirmed(t *testing.T) {
 	r := newFakeRemote(t)
 	packA := r.publish(t, packID, defaultManifest(t, r))
 	extra := []byte("pack B's extra")
 	r.put("files/extra.dll", extra)
-	packB := r.publish(t, "valheim-other", otherPack(t, r, entry("files/extra.dll", extra, "file", "extra.dll", "")))
+	packB := r.publish(t, "valheim-other", otherPack(r, entry("files/extra.dll", extra, "file", "extra.dll", "")))
 	g := newFakeGame(t, false)
 	e := New(r.client(), "0.1.0", OSFiles{})
 	ctx := context.Background()
@@ -102,7 +101,7 @@ func TestLeftoversOnSwitchKeepOldPack(t *testing.T) {
 	if err := e.Install(ctx, g.request("windows", packA), nil); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(g.root, "extra.dll"), []byte("manual"), 0o644)
+	writeTestFile(t, filepath.Join(g.root, "extra.dll"), "manual")
 	installed := snapshot(t, g.lib)
 
 	// Only the manual file is a leftover; pack A's files and folders are not.
@@ -143,7 +142,7 @@ func configManifest(r *fakeRemote, version, modCfg, otherCfg string) map[string]
 	}
 }
 
-func TestUpdateKeepsModifiedConfigs(t *testing.T) {
+func TestEngine_Install_updateSamePack_keepsModifiedPreservedFiles(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, configManifest(r, "1", "mod v1", "other v1"))
 	g := newFakeGame(t, false)
@@ -154,8 +153,8 @@ func TestUpdateKeepsModifiedConfigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(g.root, "BepInEx", "config")
-	os.WriteFile(filepath.Join(cfg, "Mod.cfg"), []byte("edited by user"), 0o644)
-	os.WriteFile(filepath.Join(cfg, "Generated.cfg"), []byte("written by a mod"), 0o644)
+	writeTestFile(t, filepath.Join(cfg, "Mod.cfg"), "edited by user")
+	writeTestFile(t, filepath.Join(cfg, "Generated.cfg"), "written by a mod")
 
 	r.publish(t, packID, configManifest(r, "2", "mod v2", "other v2"))
 	if err := e.Install(ctx, g.request("windows", pack), nil); err != nil {
@@ -189,10 +188,10 @@ func TestUpdateKeepsModifiedConfigs(t *testing.T) {
 	assertSameTree(t, vanilla, snapshot(t, g.lib))
 }
 
-func TestSwitchDoesNotCarryConfigs(t *testing.T) {
+func TestEngine_Install_switchPack_dropsPreservedFiles(t *testing.T) {
 	r := newFakeRemote(t)
 	pack := r.publish(t, packID, configManifest(r, "1", "mod v1", "other v1"))
-	m := otherPack(t, r)
+	m := otherPack(r)
 	m["preserve"] = []string{"BepInEx/config"}
 	packB := r.publish(t, "valheim-other", m)
 	g := newFakeGame(t, false)
@@ -230,8 +229,8 @@ func TestEngine_Install_crashDuringReinstall_nextRemoveRecovers(t *testing.T) {
 
 			// Simulate a crash: the panic skips rollback and cleanup.
 			func() {
-				defer func() { recover() }()
-				New(r.client(), "0.1.0", &tc.files).Install(ctx, g.request("windows", pack), nil)
+				defer func() { _ = recover() }()
+				_ = New(r.client(), "0.1.0", &tc.files).Install(ctx, g.request("windows", pack), nil)
 				t.Fatal("no crash")
 			}()
 			if _, err := os.Lstat(filepath.Join(g.root, config.StagingDirName)); err != nil {
@@ -245,4 +244,33 @@ func TestEngine_Install_crashDuringReinstall_nextRemoveRecovers(t *testing.T) {
 			assertSameTree(t, vanilla, snapshot(t, g.lib))
 		})
 	}
+}
+
+func TestEngine_Install_stageFailsDuringReinstall_keepsOldPack(t *testing.T) {
+	r := newFakeRemote(t)
+	pack := r.publish(t, packID, defaultManifest(t, r))
+	g := newFakeGame(t, false)
+	ctx := context.Background()
+	if err := New(r.client(), "0.1.0", OSFiles{}).Install(ctx, g.request("windows", pack), nil); err != nil {
+		t.Fatal(err)
+	}
+	installed := snapshot(t, g.lib)
+	markerBefore, err := os.ReadFile(MarkerPath(g.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first rename of a BepInEx path moves the owned BepInEx folder into
+	// the staging folder.
+	failing := New(r.client(), "0.1.0", &faultyFiles{op: "rename", pathMatch: "BepInEx", nth: 1})
+
+	err = failing.Install(ctx, g.request("windows", pack), nil)
+
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("err = %v, want injected failure", err)
+	}
+	assertSameTree(t, installed, snapshot(t, g.lib))
+	if markerAfter, _ := os.ReadFile(MarkerPath(g.root)); string(markerAfter) != string(markerBefore) {
+		t.Errorf("marker changed:\n%s\nwant:\n%s", markerAfter, markerBefore)
+	}
+	assertNoStaging(t, g.root)
 }

@@ -8,6 +8,12 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 )
 
+const (
+	dirPerm      fs.FileMode = 0o755
+	filePerm     fs.FileMode = 0o644
+	execFilePerm fs.FileMode = 0o755
+)
+
 // FileWriter makes every change the engine makes on disk. Tests inject a
 // FileWriter that fails or crashes on a chosen call. It is larger than the
 // usual 1–3 methods because it mirrors the os functions it replaces.
