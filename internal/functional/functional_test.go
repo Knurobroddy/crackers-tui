@@ -189,6 +189,7 @@ func TestValheim_Install_downloadFails_leavesGameUntouched(t *testing.T) {
 func TestValheim_Remove_markerFromV010_readsAndRemoves(t *testing.T) {
 	w := fakeworld.New(t, fakeworld.Options{})
 	s := newStack(t, w, "windows")
+	vanilla := fakeworld.Tree(t, w.Library)
 	if err := s.install(); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,10 @@ func TestValheim_Remove_markerFromV010_readsAndRemoves(t *testing.T) {
 	if err := s.remove(); err != nil {
 		t.Fatal(err)
 	}
-	requireFiles(t, w.GameRoot, []string{"valheim.exe"})
+	// The windows build has no Wine prefix, so no user.reg backup to ignore.
+	if diff := cmp.Diff(vanilla, fakeworld.Tree(t, w.Library)); diff != "" {
+		t.Errorf("tree after remove (-vanilla +after):\n%s", diff)
+	}
 }
 
 func requireFiles(t *testing.T, root string, rels []string) {
