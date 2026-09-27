@@ -25,3 +25,24 @@ func TestDefaultRoots_realHOMEEnv_discoversSteamLibraries(t *testing.T) {
 		t.Errorf("native install detected: %+v", res)
 	}
 }
+
+// TestStrategy_Detect_nilRoots_readsDefaultRootsOnEveryCall proves "Detect
+// again" sees a Steam root that appeared after the strategy was built.
+func TestStrategy_Detect_nilRoots_readsDefaultRootsOnEveryCall(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	strategy := New(nil, "linux")
+	if res, _ := strategy.Detect(valheim); len(res) != 0 {
+		t.Fatalf("results before Steam exists = %+v, want none", res)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fakeLinuxSteam(t, home, "valheim.exe")
+	res, err := strategy.Detect(valheim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 {
+		t.Errorf("results = %+v, want one", res)
+	}
+}

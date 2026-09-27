@@ -125,7 +125,7 @@ func buildApp(flags cliFlags) (*app.App, error) {
 	if err != nil {
 		return nil, err
 	}
-	detector := detect.NewRegistry(steam.New(steam.DefaultRoots(), runtime.GOOS))
+	detector := detect.NewRegistry(steam.New(nil, runtime.GOOS))
 	packEngine := engine.New(client, version, engine.OSFiles{})
 	deps := app.Deps{
 		Catalog:   client,

@@ -15,11 +15,13 @@ import (
 
 // Strategy finds Steam games through Steam roots, library folders and app manifests.
 type Strategy struct {
-	roots []string // candidate Steam root directories; missing ones are ignored
+	roots []string // candidate Steam root directories; missing ones are ignored; nil means DefaultRoots
 	goos  string   // selects which game builds are considered
 }
 
-// New returns a strategy that searches the given Steam roots for builds of goos.
+// New returns a strategy that searches the given Steam roots for builds of
+// goos. With nil roots it calls DefaultRoots on every Detect, so a Steam
+// install that moves while the app runs is still found.
 func New(roots []string, goos string) *Strategy {
 	return &Strategy{roots: roots, goos: goos}
 }
@@ -49,7 +51,7 @@ func (s *Strategy) Detect(game detect.GameDef) ([]detect.Result, error) {
 func (s *Strategy) Libraries() []string {
 	set := newLibrarySet()
 	var roots []string
-	for _, root := range s.roots {
+	for _, root := range s.candidateRoots() {
 		resolved, ok := existingDir(root)
 		if ok && set.add(resolved) {
 			roots = append(roots, resolved)
@@ -59,6 +61,13 @@ func (s *Strategy) Libraries() []string {
 		s.addLibraryFolders(set, root)
 	}
 	return set.paths
+}
+
+func (s *Strategy) candidateRoots() []string {
+	if s.roots == nil {
+		return DefaultRoots()
+	}
+	return s.roots
 }
 
 // ReadLibraryFolders parses libraryfolders.vdf and returns the library paths
