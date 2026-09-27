@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -267,6 +268,10 @@ func (m *model) startOp() tea.Cmd {
 }
 
 func (m *model) resultMessage(err error, removed []string) string {
+	// Removing when nothing is installed is not a failure worth a log path.
+	if m.op.Kind == app.OpRemove && errors.Is(err, engine.ErrNothingToRemove) {
+		return app.UserMessage(err)
+	}
 	if err != nil {
 		return fmt.Sprintf("%s:\n\n%s\n\nLog file: %s", actionTexts[m.op.Kind].failed, app.UserMessage(err), m.deps.LogPath)
 	}

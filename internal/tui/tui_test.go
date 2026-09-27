@@ -244,3 +244,14 @@ func TestModel_Update_updateFailsWithPermissionError_showsAdministratorAdvice(t 
 		t.Errorf("screen = %v, view:\n%s", m.screen, v)
 	}
 }
+
+func TestModel_Update_removeWithNothingInstalled_showsPlainNotice(t *testing.T) {
+	m := startup(t, false)
+	m.op = app.Operation{Kind: app.OpRemove}
+	m.screen, m.busy = screenProgress, true
+	m.Update(opDoneMsg{err: engine.ErrNothingToRemove})
+	want := "Nothing to remove: no pack is installed for this game."
+	if m.resultText != want {
+		t.Errorf("result text = %q, want %q", m.resultText, want)
+	}
+}
