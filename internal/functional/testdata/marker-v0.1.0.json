@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "app_version": "0.1.0",
+  "pack_id": "valheim-test",
+  "pack_name": "Test pack",
+  "pack_version": "2026.09.22",
+  "manifest_sha256": "fe3f6091b4a02ee18cf299997687239983174d9c13096484f775b078ec2f68fe",
+  "build_id": "windows",
+  "installed_at": "2026-09-27T08:56:41Z",
+  "files": [
+    "BepInEx/config/crackers-test.cfg",
+    "winhttp.dll",
+    "doorstop_config.ini",
+    "start_game_bepinex.sh",
+    "BepInEx/core/BepInEx.dll",
+    "BepInEx/core/BepInEx.Preloader.dll",
+    "BepInEx/plugins/SomeMod.dll"
+  ],
+  "dirs_created": [
+    "BepInEx",
+    "BepInEx/core",
+    "BepInEx/config",
+    "BepInEx/plugins"
+  ],
+  "owned_dirs": [
+    "BepInEx"
+  ],
+  "file_sha256": {
+    "BepInEx/config/crackers-test.cfg": "0ec9ec430fc0f65d51dc782f5944b6dac39f71b3c71b1a17e1bf5f3ea09d36ad",
+    "BepInEx/core/BepInEx.Preloader.dll": "a0d2b5a378046f9d8506aaf3f6a7778d34619a41d45b083cf3e7ef051567f97e",
+    "BepInEx/core/BepInEx.dll": "c972af05228dd559ba130d3a1eebf2ddad68bb6b0a3ae7376615f5083113f00d",
+    "BepInEx/plugins/SomeMod.dll": "1c74a507b6ca9f03499eb6e847c593d103470e345b0c914bd9fa59edcfd363c9",
+    "doorstop_config.ini": "9b75c2a0d7208b80433fdfc78e70d361acc294cf3852896d2d0a864d2a84b6c8",
+    "start_game_bepinex.sh": "76d910165c2f1ebf4f6e6a3911b12a3fcb390a449ab27256c8c8b7802e53cc22",
+    "winhttp.dll": "d5e3766c092463c0f90234c7d46eff09492f33f905011af9afc4853000ec3755"
+  },
+  "undo": []
+}
