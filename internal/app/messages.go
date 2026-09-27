@@ -30,6 +30,9 @@ var messageRules = []func(error) (string, bool){
 // UserMessage turns an error from any layer into text for the player: the
 // advice for every known cause, followed by the technical detail.
 func UserMessage(err error) string {
+	if err == nil {
+		return ""
+	}
 	var advice []string
 	for _, rule := range messageRules {
 		if text, ok := rule(err); ok {
@@ -108,6 +111,9 @@ func ListPaths(paths []string, limit int) string {
 }
 
 func capitalize(s string) string {
+	if s == "" {
+		return ""
+	}
 	first, size := utf8.DecodeRuneInString(s)
 	return string(unicode.ToUpper(first)) + s[size:]
 }

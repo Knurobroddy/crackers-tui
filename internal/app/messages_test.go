@@ -40,3 +40,15 @@ func TestUserMessage_unknownError_capitalizesTechnicalText(t *testing.T) {
 		t.Errorf("UserMessage = %q", got)
 	}
 }
+
+func TestUserMessage_nilError_returnsEmpty(t *testing.T) {
+	if got := app.UserMessage(nil); got != "" {
+		t.Errorf("UserMessage(nil) = %q, want empty", got)
+	}
+}
+
+func TestUserMessage_emptyMessageError_returnsEmpty(t *testing.T) {
+	if got := app.UserMessage(errors.New("")); got != "" {
+		t.Errorf("UserMessage = %q, want empty", got)
+	}
+}
