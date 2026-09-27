@@ -217,3 +217,30 @@ func TestModel_Update_updateFailsAfterLibraryError_continueReloadsLibrary(t *tes
 		t.Fatalf("screen = %v, remoteDone = %v, want library reload", m.screen, m.remoteDone)
 	}
 }
+
+func TestModel_View_gameMarkerNeedsNewerApp_showsUpdateAdvice(t *testing.T) {
+	m := startup(t, false)
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 45})
+	m.library, m.remoteDone = testLibrary, true
+	markerErr := &remote.UpdateRequiredError{Doc: "install marker", Reason: "schema 9 is newer than supported"}
+	m.Update(gamesDetectedMsg{games: []app.Game{{
+		Install: detect.Result{GameID: "valheim", RootDir: "/g"},
+		Def:     testGames.Games[0],
+		Status:  engine.Status{State: engine.Unknown, Err: markerErr},
+	}}})
+	m.selected = 0
+	m.openGame()
+	if v := m.View(); !strings.Contains(v, "Please update Crackers Modinst") {
+		t.Errorf("game view lacks update advice:\n%s", v)
+	}
+}
+
+func TestModel_Update_updateFailsWithPermissionError_showsAdministratorAdvice(t *testing.T) {
+	m := startup(t, true, updateCheckedMsg{release: &update.Release{Version: "9.0.0"}})
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 45})
+	m.startUpdate()
+	m.Update(updateAppliedMsg{err: &engine.PermissionError{Path: "/app", Err: errors.New("access denied")}})
+	if v := m.View(); m.screen != screenResult || !strings.Contains(v, "Permission denied writing to /app. On Windows, try running") {
+		t.Errorf("screen = %v, view:\n%s", m.screen, v)
+	}
+}

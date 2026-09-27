@@ -93,7 +93,7 @@ func (m *model) onUpdateApplied(msg updateAppliedMsg) tea.Cmd {
 		return nil
 	}
 	slog.Error("apply app update", "err", msg.err)
-	text := fmt.Sprintf("The update failed:\n\n%v\n\nLog file: %s", msg.err, m.deps.LogPath)
+	text := fmt.Sprintf("The update failed:\n\n%s\n\nLog file: %s", app.UserMessage(msg.err), m.deps.LogPath)
 	if remote.IsUpdateRequired(m.remoteErr) {
 		return m.showError(text, retryUpdate)
 	}

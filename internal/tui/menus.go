@@ -81,7 +81,7 @@ func (m *model) openGame() tea.Cmd {
 	game := m.games[m.selected]
 	description := "Folder: " + game.Install.RootDir + "\nStatus: " + game.Status.String()
 	if game.Status.Err != nil {
-		description += "\n" + game.Status.Err.Error()
+		description += "\n" + app.UserMessage(game.Status.Err)
 	}
 	return m.setForm(selectForm(game.Def.Name, description, m.gameOptions(game)...))
 }
