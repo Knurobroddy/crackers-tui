@@ -81,8 +81,8 @@ func TestEngine_Install_reinstallOrSwitchFails_keepsOldPack(t *testing.T) {
 				t.Errorf("user.reg changed:\n%s", regAfter)
 			}
 			assertSameTree(t, installed, after)
-			if mk, err := ReadMarker(g.root); err != nil || mk.PackID != packID {
-				t.Errorf("marker = %+v, %v", mk, err)
+			if marker, err := ReadMarker(g.root); err != nil || marker.PackID != packID {
+				t.Errorf("marker = %+v, %v", marker, err)
 			}
 		})
 	}
@@ -106,8 +106,8 @@ func TestEngine_Install_switchWithLeftovers_keepsOldPackUntilConfirmed(t *testin
 
 	// Only the manual file is a leftover; pack A's files and folders are not.
 	err := e.Install(ctx, g.request("windows", packB), nil)
-	var lo *LeftoversError
-	if !errors.As(err, &lo) || !reflect.DeepEqual(lo.Paths, []string{"extra.dll"}) {
+	var leftoversErr *LeftoversError
+	if !errors.As(err, &leftoversErr) || !reflect.DeepEqual(leftoversErr.Paths, []string{"extra.dll"}) {
 		t.Fatalf("err = %v, want LeftoversError for extra.dll only", err)
 	}
 	assertSameTree(t, installed, snapshot(t, g.lib))

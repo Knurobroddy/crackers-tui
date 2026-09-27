@@ -288,23 +288,23 @@ func TestEngine_Install_thenRemove_restoresExactTree(t *testing.T) {
 		}
 	}
 
-	mk, err := ReadMarker(g.root)
+	marker, err := ReadMarker(g.root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantFiles := []string{"BepInEx/plugins/common.txt", "winhttp.dll", "doorstop_config.ini", "BepInEx/core/BepInEx.dll", "start_game_bepinex.sh", "BepInEx/plugins/SomeMod.dll"}
-	if !reflect.DeepEqual(mk.Files, wantFiles) {
-		t.Errorf("marker files = %q, want %q", mk.Files, wantFiles)
+	if !reflect.DeepEqual(marker.Files, wantFiles) {
+		t.Errorf("marker files = %q, want %q", marker.Files, wantFiles)
 	}
 	wantDirs := []string{"BepInEx", "BepInEx/config", "BepInEx/plugins", "BepInEx/core"}
-	if !reflect.DeepEqual(mk.DirsCreated, wantDirs) {
-		t.Errorf("marker dirs_created = %q, want %q", mk.DirsCreated, wantDirs)
+	if !reflect.DeepEqual(marker.DirsCreated, wantDirs) {
+		t.Errorf("marker dirs_created = %q, want %q", marker.DirsCreated, wantDirs)
 	}
 	manifestRaw, _ := json.Marshal(defaultManifest(t, r))
-	if mk.PackID != packID || mk.PackName != "Test pack" || mk.PackVersion != "2026.09.22" || mk.BuildID != "windows" ||
-		mk.ManifestSHA256 != hexSHA(manifestRaw) || !reflect.DeepEqual(mk.OwnedDirs, []string{"BepInEx"}) || len(mk.Undo) != 0 ||
-		mk.AppVersion != "0.1.0" || mk.InstalledAt.IsZero() {
-		t.Errorf("marker = %+v", mk)
+	if marker.PackID != packID || marker.PackName != "Test pack" || marker.PackVersion != "2026.09.22" || marker.BuildID != "windows" ||
+		marker.ManifestSHA256 != hexSHA(manifestRaw) || !reflect.DeepEqual(marker.OwnedDirs, []string{"BepInEx"}) || len(marker.Undo) != 0 ||
+		marker.AppVersion != "0.1.0" || marker.InstalledAt.IsZero() {
+		t.Errorf("marker = %+v", marker)
 	}
 	raw, _ := os.ReadFile(MarkerPath(g.root))
 	if !bytes.Contains(raw, []byte(`"undo": []`)) {
@@ -314,9 +314,9 @@ func TestEngine_Install_thenRemove_restoresExactTree(t *testing.T) {
 		t.Error("no progress events")
 	}
 
-	ix := &remote.Index{Packs: []remote.PackRef{pack}}
-	if st := e.Status(ctx, g.root, ix); st.State != Installed {
-		t.Errorf("status = %v, want Installed", st)
+	index := &remote.Index{Packs: []remote.PackRef{pack}}
+	if status := e.Status(ctx, g.root, index); status.State != Installed {
+		t.Errorf("status = %v, want Installed", status)
 	}
 
 	// Files created by mods at runtime live in owned_dirs and must go too.
@@ -327,8 +327,8 @@ func TestEngine_Install_thenRemove_restoresExactTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSameTree(t, before, snapshot(t, g.lib))
-	if st := e.Status(ctx, g.root, ix); st.State != NotInstalled {
-		t.Errorf("status after remove = %v", st)
+	if status := e.Status(ctx, g.root, index); status.State != NotInstalled {
+		t.Errorf("status after remove = %v", status)
 	}
 	if err := e.Remove(ctx, g.root, nil); !errors.Is(err, ErrNothingToRemove) {
 		t.Errorf("second remove: err = %v", err)
@@ -351,12 +351,12 @@ func TestEngine_Install_protonBuild_appliesHookAndRemoveRestoresUserReg(t *testi
 	if !bytes.Contains(reg, []byte(`"winhttp"="native,builtin"`)) {
 		t.Fatalf("override missing from user.reg:\n%s", reg)
 	}
-	mk, _ := ReadMarker(g.root)
-	if len(mk.Undo) != 1 || mk.Undo[0].Op != "wine_reg_restore" || mk.BuildID != "linux_proton" {
-		t.Fatalf("marker undo = %+v", mk.Undo)
+	marker, _ := ReadMarker(g.root)
+	if len(marker.Undo) != 1 || marker.Undo[0].Op != "wine_reg_restore" || marker.BuildID != "linux_proton" {
+		t.Fatalf("marker undo = %+v", marker.Undo)
 	}
-	if !strings.Contains(string(mk.Undo[0].Raw), `"previous":null`) {
-		t.Errorf("undo = %s", mk.Undo[0].Raw)
+	if !strings.Contains(string(marker.Undo[0].Raw), `"previous":null`) {
+		t.Errorf("undo = %s", marker.Undo[0].Raw)
 	}
 
 	if err := e.Remove(ctx, g.root, nil); err != nil {
@@ -490,8 +490,8 @@ func TestEngine_Install_unknownFileAtTarget_returnsLeftoversError(t *testing.T) 
 	writeTestFile(t, filepath.Join(g.root, "winhttp.dll"), "someone else's")
 	before := snapshot(t, g.lib)
 	err := New(r.client(), "0.1.0", OSFiles{}).Install(context.Background(), g.request("windows", pack), nil)
-	var lo *LeftoversError
-	if !errors.As(err, &lo) || !reflect.DeepEqual(lo.Paths, []string{"winhttp.dll"}) {
+	var leftoversErr *LeftoversError
+	if !errors.As(err, &leftoversErr) || !reflect.DeepEqual(leftoversErr.Paths, []string{"winhttp.dll"}) {
 		t.Fatalf("err = %v, want LeftoversError for winhttp.dll", err)
 	}
 	assertSameTree(t, before, snapshot(t, g.lib))
@@ -524,12 +524,12 @@ func TestEngine_Install_leftoversConfirmed_deletesThemAndInstalls(t *testing.T) 
 	ctx := context.Background()
 
 	err := e.Install(ctx, g.request("windows", pack), nil)
-	var lo *LeftoversError
-	if !errors.As(err, &lo) {
+	var leftoversErr *LeftoversError
+	if !errors.As(err, &leftoversErr) {
 		t.Fatalf("err = %v, want LeftoversError", err)
 	}
-	if want := []string{"BepInEx/", "winhttp.dll", "doorstop_config.ini"}; !reflect.DeepEqual(lo.Paths, want) {
-		t.Fatalf("leftovers = %q, want %q", lo.Paths, want)
+	if want := []string{"BepInEx/", "winhttp.dll", "doorstop_config.ini"}; !reflect.DeepEqual(leftoversErr.Paths, want) {
+		t.Fatalf("leftovers = %q, want %q", leftoversErr.Paths, want)
 	}
 	withLeftovers := snapshot(t, g.lib)
 
@@ -618,7 +618,7 @@ func TestEngine_Install_reinstallAndSwitch_replacesPackAndUpdatesStatus(t *testi
 	if err := e.Install(ctx, g.request("windows", packA), nil); err != nil {
 		t.Fatal(err)
 	}
-	ix := &remote.Index{Packs: []remote.PackRef{packA, packB}}
+	index := &remote.Index{Packs: []remote.PackRef{packA, packB}}
 
 	// Reinstall of the same pack goes through remove + install.
 	if err := e.Install(ctx, g.request("windows", packA), nil); err != nil {
@@ -629,12 +629,12 @@ func TestEngine_Install_reinstallAndSwitch_replacesPackAndUpdatesStatus(t *testi
 	m := defaultManifest(t, r)
 	m["version"] = "2026.10.01"
 	r.publish(t, packID, m)
-	if st := e.Status(ctx, g.root, ix); st.State != UpdateAvailable {
-		t.Errorf("status = %v, want UpdateAvailable", st)
+	if status := e.Status(ctx, g.root, index); status.State != UpdateAvailable {
+		t.Errorf("status = %v, want UpdateAvailable", status)
 	}
 	// A pack missing from the index is "no longer offered".
-	if st := e.Status(ctx, g.root, &remote.Index{Packs: []remote.PackRef{packB}}); st.State != NotOffered {
-		t.Errorf("status = %v, want NotOffered", st)
+	if status := e.Status(ctx, g.root, &remote.Index{Packs: []remote.PackRef{packB}}); status.State != NotOffered {
+		t.Errorf("status = %v, want NotOffered", status)
 	}
 
 	// Switching packs removes the old one first.
@@ -647,8 +647,8 @@ func TestEngine_Install_reinstallAndSwitch_replacesPackAndUpdatesStatus(t *testi
 	if got := readFile(t, g.root, "BepInEx/plugins/other.dll"); got != "other pack" {
 		t.Errorf("other.dll = %q", got)
 	}
-	if mk, _ := ReadMarker(g.root); mk.PackID != "valheim-other" {
-		t.Errorf("marker pack = %s", mk.PackID)
+	if marker, _ := ReadMarker(g.root); marker.PackID != "valheim-other" {
+		t.Errorf("marker pack = %s", marker.PackID)
 	}
 	if err := e.Remove(ctx, g.root, nil); err != nil {
 		t.Fatal(err)
@@ -660,8 +660,8 @@ func TestEngine_Remove_corruptMarker_failsAndKeepsMarker(t *testing.T) {
 	g := newFakeGame(t, false)
 	writeTestFile(t, MarkerPath(g.root), "{not json")
 	e := New(nil, "0.1.0", OSFiles{})
-	if st := e.Status(context.Background(), g.root, &remote.Index{}); st.State != Unknown || st.Err == nil {
-		t.Errorf("status = %+v", st)
+	if status := e.Status(context.Background(), g.root, &remote.Index{}); status.State != Unknown || status.Err == nil {
+		t.Errorf("status = %+v", status)
 	}
 	if err := e.Remove(context.Background(), g.root, nil); err == nil || errors.Is(err, ErrNothingToRemove) {
 		t.Errorf("remove with corrupt marker: err = %v", err)
@@ -675,8 +675,8 @@ func TestEngine_Remove_markerPathsOutsideRoot_failsAndDeletesNothing(t *testing.
 	g := newFakeGame(t, false)
 	outside := filepath.Join(g.lib, "outside.txt")
 	writeTestFile(t, outside, "keep")
-	mk := &Marker{SchemaVersion: 1, PackID: "x", Files: []string{"../../outside.txt"}, OwnedDirs: []string{"../.."}}
-	if err := writeMarker(OSFiles{}, g.root, mk); err != nil {
+	marker := &Marker{SchemaVersion: 1, PackID: "x", Files: []string{"../../outside.txt"}, OwnedDirs: []string{"../.."}}
+	if err := writeMarker(OSFiles{}, g.root, marker); err != nil {
 		t.Fatal(err)
 	}
 	if err := New(nil, "0.1.0", OSFiles{}).Remove(context.Background(), g.root, nil); err == nil {
