@@ -333,10 +333,10 @@ func writeHashed(dst string, body io.Reader, total int64, progress ProgressFunc)
 	if copyErr != nil {
 		return downloadResult{}, copyErr
 	}
+	tracker.flush()
 	if closeErr != nil {
 		return downloadResult{}, closeErr
 	}
-	tracker.flush()
 	return downloadResult{sha256: hex.EncodeToString(hash.Sum(nil)), size: n}, nil
 }
 
