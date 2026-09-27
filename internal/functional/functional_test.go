@@ -1,6 +1,7 @@
 package functional_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -63,13 +64,23 @@ func TestValheim_InstallThenRemove_eachBuild_restoresVanilla(t *testing.T) {
 	}
 }
 
-// The valheim-test pack manifest declares no "preserve" paths, so a reinstall
-// unconditionally re-ships every file it owns: a user edit to a shipped
-// config file does not survive. (The brief for this test assumed "preserve"
-// protects it; the fixture has no such entry, so this pins the actual
-// behavior instead. See task-3-report.md.)
-func TestValheim_Reinstall_userChangedConfig_overwritesWithShippedVersion(t *testing.T) {
+func TestValheim_Reinstall_preservedUserChangedConfig_keepsUserVersion(t *testing.T) {
 	w := fakeworld.New(t, fakeworld.Options{})
+	manifest, err := os.ReadFile(filepath.Join(w.LibraryDir, "packs", "valheim-test.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(manifest, &m); err != nil {
+		t.Fatal(err)
+	}
+	m["preserve"] = []string{"BepInEx/config"}
+	patched, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.WriteLibraryFile(t, "packs/valheim-test.json", patched)
+
 	s := newStack(t, w, "windows")
 	if err := s.install(); err != nil {
 		t.Fatal(err)
@@ -81,11 +92,7 @@ func TestValheim_Reinstall_userChangedConfig_overwritesWithShippedVersion(t *tes
 		t.Fatal(err)
 	}
 
-	shipped, err := os.ReadFile(filepath.Join(w.LibraryDir, "files", "crackers-test.cfg"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireContent(t, cfg, string(shipped))
+	requireContent(t, cfg, "user edit")
 }
 
 func TestValheim_Status_manifestChangedRemotely_updateAvailable(t *testing.T) {
