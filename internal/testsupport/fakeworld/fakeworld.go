@@ -15,7 +15,12 @@ import (
 	"testing"
 )
 
-const valheimAppID = "892970"
+const (
+	valheimAppID = "892970"
+
+	dirPerm  = 0o755
+	filePerm = 0o644
+)
 
 // Options selects optional parts of the world.
 type Options struct {
@@ -153,21 +158,21 @@ func copyEntry(src, dst, p string, d fs.DirEntry, walkErr error) error {
 	}
 	target := filepath.Join(dst, rel)
 	if d.IsDir() {
-		return os.MkdirAll(target, 0o755)
+		return os.MkdirAll(target, dirPerm)
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(target, data, 0o644)
+	return os.WriteFile(target, data, filePerm)
 }
 
 func writeFile(t *testing.T, path string, data []byte) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, filePerm); err != nil {
 		t.Fatal(err)
 	}
 }

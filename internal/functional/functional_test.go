@@ -86,7 +86,9 @@ func TestValheim_Reinstall_preservedUserChangedConfig_keepsUserVersion(t *testin
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(w.GameRoot, "BepInEx", "config", "crackers-test.cfg")
-	os.WriteFile(cfg, []byte("user edit"), 0o644)
+	if err := os.WriteFile(cfg, []byte("user edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := s.install(); err != nil {
 		t.Fatal(err)
@@ -113,8 +115,12 @@ func TestValheim_Install_manualModsPresent_reportsLeftoversThenCleansOnConfirm(t
 	w := fakeworld.New(t, fakeworld.Options{})
 	s := newStack(t, w, "windows")
 	oldMod := filepath.Join(w.GameRoot, "BepInEx", "plugins", "Old.dll")
-	os.MkdirAll(filepath.Dir(oldMod), 0o755)
-	os.WriteFile(oldMod, []byte("old"), 0o644)
+	if err := os.MkdirAll(filepath.Dir(oldMod), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldMod, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	var leftovers *engine.LeftoversError
 	if err := s.install(); !errors.As(err, &leftovers) {
@@ -136,12 +142,15 @@ func TestValheim_Install_manualModsPresent_reportsLeftoversThenCleansOnConfirm(t
 func TestValheim_CleanLeftovers_noPackInstalled_removesOnlyPackPaths(t *testing.T) {
 	w := fakeworld.New(t, fakeworld.Options{})
 	s := newStack(t, w, "windows")
-	os.MkdirAll(filepath.Join(w.GameRoot, "BepInEx", "plugins"), 0o755)
+	if err := os.MkdirAll(filepath.Join(w.GameRoot, "BepInEx", "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	notes := filepath.Join(w.GameRoot, "notes.txt")
-	os.WriteFile(notes, []byte("mine"), 0o644)
+	if err := os.WriteFile(notes, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	removed, err := s.cleanLeftovers()
-
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +196,9 @@ func TestValheim_Remove_markerFromV010_readsAndRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(w.GameRoot, ".crackers-modinst.json"), pinned, 0o644)
+	if err := os.WriteFile(filepath.Join(w.GameRoot, ".crackers-modinst.json"), pinned, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := s.state(); got != engine.Installed {
 		t.Fatalf("state = %v, want Installed", got)

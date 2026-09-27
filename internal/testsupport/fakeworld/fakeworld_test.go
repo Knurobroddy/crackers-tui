@@ -33,8 +33,12 @@ func TestNew_withPrefix_buildsSteamLayoutAndServesLibrary(t *testing.T) {
 
 func TestTree_fileAndDir_mapsDirsAndHashes(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "a"), 0o755)
-	os.WriteFile(filepath.Join(dir, "a", "f.txt"), []byte("x"), 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a", "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got := fakeworld.Tree(t, dir)
 
