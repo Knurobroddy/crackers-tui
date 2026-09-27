@@ -10,7 +10,13 @@ import (
 	"path/filepath"
 
 	"github.com/Knurobroddy/crackers-tui/internal/fsutil"
-	"github.com/Knurobroddy/crackers-tui/internal/logx"
+)
+
+// Extra keys set by the steam strategy.
+const (
+	ExtraSteamLibrary   = "steam_library"
+	ExtraSteamAppID     = "steam_appid"
+	ExtraSteamLibraries = "steam_libraries" // all known libraries, joined with os.PathListSeparator
 )
 
 // BuildDef is one build variant of a game (games.json "builds").
@@ -45,13 +51,6 @@ type Result struct {
 	Extra      map[string]string `json:"extra,omitempty"`
 }
 
-// Extra keys set by the steam strategy.
-const (
-	ExtraSteamLibrary   = "steam_library"
-	ExtraSteamAppID     = "steam_appid"
-	ExtraSteamLibraries = "steam_libraries" // all known libraries, joined with os.PathListSeparator
-)
-
 // Strategy detects installs of one game.
 type Strategy interface {
 	Name() string
@@ -61,17 +60,26 @@ type Strategy interface {
 // Registry maps strategy names to implementations.
 type Registry struct {
 	strategies map[string]Strategy
-	log        *slog.Logger
 }
 
 // NewRegistry returns a registry containing the given strategies.
-func NewRegistry(log *slog.Logger, strategies ...Strategy) *Registry {
-	log = logx.OrDiscard(log)
-	r := &Registry{strategies: map[string]Strategy{}, log: log}
+func NewRegistry(strategies ...Strategy) *Registry {
+	r := &Registry{strategies: map[string]Strategy{}}
 	for _, s := range strategies {
 		r.strategies[s.Name()] = s
 	}
 	return r
+}
+
+// FilesFor returns the manifest file list used by the given build, or "" if
+// the build is unknown.
+func (g GameDef) FilesFor(buildID string) string {
+	for _, build := range g.Builds {
+		if build.ID == buildID {
+			return build.Files
+		}
+	}
+	return ""
 }
 
 // Detect runs detection for every game that has at least one pack
@@ -80,28 +88,28 @@ func NewRegistry(log *slog.Logger, strategies ...Strategy) *Registry {
 func (r *Registry) Detect(games []GameDef, hasPacks map[string]bool) []Result {
 	var out []Result
 	seen := map[string]bool{}
-	for _, g := range games {
-		if !hasPacks[g.ID] {
-			r.log.Info("skipping game without packs", "game", g.ID)
+	for _, game := range games {
+		if !hasPacks[game.ID] {
+			slog.Debug("skip game without packs", "game_id", game.ID)
 			continue
 		}
-		s, ok := r.strategies[g.Strategy]
+		strategy, ok := r.strategies[game.Strategy]
 		if !ok {
-			r.log.Warn("unknown detection strategy; app too old for this game", "game", g.ID, "strategy", g.Strategy)
+			slog.Warn("skip game with unknown strategy", "game_id", game.ID, "strategy", game.Strategy)
 			continue
 		}
-		results, err := s.Detect(g)
+		results, err := strategy.Detect(game)
 		if err != nil {
-			r.log.Error("detection failed", "game", g.ID, "err", err)
+			slog.Warn("detect game", "game_id", game.ID, "err", err)
 		}
-		for _, res := range results {
-			key := g.ID + "\x00" + PathKey(res.RootDir)
+		for _, result := range results {
+			key := game.ID + "\x00" + PathKey(result.RootDir)
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
-			r.log.Info("detected game", "game", res.GameID, "build", res.BuildID, "root", res.RootDir)
-			out = append(out, res)
+			slog.Debug("game detected", "game_id", result.GameID, "build_id", result.BuildID, "path", result.RootDir)
+			out = append(out, result)
 		}
 	}
 	return out
@@ -110,13 +118,13 @@ func (r *Registry) Detect(games []GameDef, hasPacks map[string]bool) []Result {
 // SelectBuild evaluates builds for goos in array order and returns the first
 // one whose anchor exists under rootDir, together with the absolute anchor path.
 func SelectBuild(builds []BuildDef, goos, rootDir string) (BuildDef, string, bool) {
-	for _, b := range builds {
-		if b.OS != goos || b.Anchor == "" {
+	for _, build := range builds {
+		if build.OS != goos || build.Anchor == "" {
 			continue
 		}
-		anchor := filepath.Join(rootDir, filepath.FromSlash(b.Anchor))
-		if fi, err := os.Stat(anchor); err == nil && !fi.IsDir() {
-			return b, anchor, true
+		anchor := filepath.Join(rootDir, filepath.FromSlash(build.Anchor))
+		if info, err := os.Stat(anchor); err == nil && !info.IsDir() {
+			return build, anchor, true
 		}
 	}
 	return BuildDef{}, "", false

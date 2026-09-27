@@ -72,7 +72,7 @@ func run() (code int) {
 	if err != nil {
 		return fatal(log, err, interactive)
 	}
-	detector := detect.NewRegistry(log, steam.New(log))
+	detector := detect.NewRegistry(steam.New(steam.DefaultRoots(), runtime.GOOS))
 
 	if *detectOnly {
 		return runDetectOnly(client, detector, log)

@@ -48,7 +48,9 @@ func TestReadInstallDir(t *testing.T) {
 	}
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.acf")
-	os.WriteFile(bad, []byte("\"AppState\"\n{\n\t\"installdir\"\t\t\"..\"\n}\n"), 0o644)
+	if err := os.WriteFile(bad, []byte("\"AppState\"\n{\n\t\"installdir\"\t\t\"..\"\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReadInstallDir(bad); err == nil {
 		t.Error(`installdir ".." accepted`)
 	}
@@ -100,10 +102,7 @@ func fakeLinuxSteam(t *testing.T, home string, gameFiles ...string) (steamRoot, 
 }
 
 func linuxStrategy(home string) *Strategy {
-	s := New(nil)
-	s.GOOS = "linux"
-	s.Roots = func() []string { return linuxRootCandidates(home) }
-	return s
+	return New(linuxRootCandidates(home), "linux")
 }
 
 func TestLinuxProtonDetected(t *testing.T) {
@@ -111,7 +110,7 @@ func TestLinuxProtonDetected(t *testing.T) {
 	t.Setenv("HOME", home)
 	steamRoot, lib2 := fakeLinuxSteam(t, home, "valheim.exe", "valheim_Data/x")
 	// ~/.steam/steam is normally a symlink to ~/.local/share/Steam; it must be deduplicated.
-	os.MkdirAll(filepath.Join(home, ".steam"), 0o755)
+	_ = os.MkdirAll(filepath.Join(home, ".steam"), 0o755)
 	symlinked := os.Symlink(steamRoot, filepath.Join(home, ".steam", "steam")) == nil
 
 	s := linuxStrategy(home)

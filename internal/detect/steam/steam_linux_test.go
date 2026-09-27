@@ -9,7 +9,7 @@ func TestDefaultRootsFromHOME(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	fakeLinuxSteam(t, home, "valheim.exe")
-	res, err := New(nil).Detect(valheim)
+	res, err := New(DefaultRoots(), "linux").Detect(valheim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestDefaultRootsFromHOME(t *testing.T) {
 	native := t.TempDir()
 	t.Setenv("HOME", native)
 	fakeLinuxSteam(t, native, "valheim.x86_64")
-	if res, _ := New(nil).Detect(valheim); len(res) != 0 {
+	if res, _ := New(DefaultRoots(), "linux").Detect(valheim); len(res) != 0 {
 		t.Errorf("native install detected: %+v", res)
 	}
 }

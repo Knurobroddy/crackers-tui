@@ -394,19 +394,10 @@ func (m *model) startDetect() tea.Cmd {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			st := d.Engine.Status(ctx, r.RootDir, index)
 			cancel()
-			rows = append(rows, gameRow{Result: r, Game: g, Files: filesKey(g, r.BuildID), Status: st})
+			rows = append(rows, gameRow{Result: r, Game: g, Files: g.FilesFor(r.BuildID), Status: st})
 		}
 		return detectedMsg{rows: rows}
 	}
-}
-
-func filesKey(g detect.GameDef, buildID string) string {
-	for _, b := range g.Builds {
-		if b.ID == buildID {
-			return b.Files
-		}
-	}
-	return ""
 }
 
 // startOp runs the pending install/remove in a goroutine. Progress events and

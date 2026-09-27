@@ -35,8 +35,8 @@ func newStack(t *testing.T, w *fakeworld.World, goos string) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	strategy := &steam.Strategy{GOOS: goos, Roots: func() []string { return []string{w.SteamRoot} }}
-	s := &stack{t: t, world: w, client: client, reg: detect.NewRegistry(nil, strategy), engine: engine.New(client, testAppVersion, nil)}
+	strategy := steam.New([]string{w.SteamRoot}, goos)
+	s := &stack{t: t, world: w, client: client, reg: detect.NewRegistry(strategy), engine: engine.New(client, testAppVersion, nil)}
 	s.detect()
 	return s
 }

@@ -2,5 +2,5 @@
 
 package steam
 
-// defaultRoots returns nothing: only Windows and Linux are supported.
-func defaultRoots() []string { return nil }
+// DefaultRoots returns nothing: only Windows and Linux are supported.
+func DefaultRoots() []string { return nil }

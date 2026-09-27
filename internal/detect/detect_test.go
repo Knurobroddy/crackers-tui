@@ -10,7 +10,9 @@ import (
 func touch(t *testing.T, root, rel string) {
 	t.Helper()
 	p := filepath.Join(root, filepath.FromSlash(rel))
-	os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(p, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -47,9 +49,23 @@ func TestSelectBuildOrder(t *testing.T) {
 
 func TestSelectBuildIgnoresDirectoryAnchor(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "game.exe"), 0o755)
+	if err := os.MkdirAll(filepath.Join(root, "game.exe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, ok := SelectBuild([]BuildDef{{ID: "w", OS: "windows", Anchor: "game.exe"}}, "windows", root); ok {
 		t.Error("directory accepted as anchor")
+	}
+}
+
+func TestGameDef_FilesFor_knownAndUnknownBuild_returnsFilesKeyOrEmpty(t *testing.T) {
+	game := GameDef{Builds: []BuildDef{{ID: "linux_proton", Files: "windows"}}}
+	for _, tc := range []struct{ build, want string }{
+		{"linux_proton", "windows"},
+		{"missing", ""},
+	} {
+		if got := game.FilesFor(tc.build); got != tc.want {
+			t.Errorf("FilesFor(%q) = %q, want %q", tc.build, got, tc.want)
+		}
 	}
 }
 
@@ -63,7 +79,7 @@ func (f fakeStrategy) Detect(GameDef) ([]Result, error) { return f.results, f.er
 
 func TestRegistryDetect(t *testing.T) {
 	root := t.TempDir()
-	reg := NewRegistry(nil, fakeStrategy{results: []Result{
+	reg := NewRegistry(fakeStrategy{results: []Result{
 		{GameID: "a", BuildID: "b", RootDir: root},
 		{GameID: "a", BuildID: "b", RootDir: root + string(filepath.Separator)}, // duplicate
 	}, err: errors.New("one library broken")})

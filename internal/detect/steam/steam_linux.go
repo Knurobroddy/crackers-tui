@@ -4,9 +4,9 @@ package steam
 
 import "os"
 
-// defaultRoots returns the Linux Steam root candidates under $HOME
+// DefaultRoots returns the Linux Steam root candidates under $HOME
 // (native, legacy symlinks and Flatpak).
-func defaultRoots() []string {
+func DefaultRoots() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
