@@ -18,7 +18,7 @@ func touch(t *testing.T, root, rel string) {
 	}
 }
 
-func TestSelectBuildOrder(t *testing.T) {
+func TestSelectBuild_multipleAnchorsMatch_returnsFirstDefinedOrder(t *testing.T) {
 	builds := []BuildDef{
 		{ID: "win", OS: "windows", Anchor: "game.exe"},
 		{ID: "proton", OS: "linux", Anchor: "game.exe"},
@@ -47,7 +47,7 @@ func TestSelectBuildOrder(t *testing.T) {
 	}
 }
 
-func TestSelectBuildIgnoresDirectoryAnchor(t *testing.T) {
+func TestSelectBuild_anchorIsDirectory_notMatched(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "game.exe"), 0o755); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ type fakeStrategy struct {
 func (f fakeStrategy) Name() string                     { return "fake" }
 func (f fakeStrategy) Detect(GameDef) ([]Result, error) { return f.results, f.err }
 
-func TestRegistryDetect(t *testing.T) {
+func TestRegistry_Detect_duplicatesAndUnrequestedGames_returnsUniqueRequestedOnly(t *testing.T) {
 	root := t.TempDir()
 	reg := NewRegistry(fakeStrategy{results: []Result{
 		{GameID: "a", BuildID: "b", RootDir: root},

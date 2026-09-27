@@ -8,9 +8,10 @@ import (
 	"testing"
 )
 
-// TestTestdataRemoteIsConsistent serves testdata/remote (used for manual smoke
-// tests) and checks that every document parses and every hash matches.
-func TestTestdataRemoteIsConsistent(t *testing.T) {
+// TestClient_FetchAll_testdataFixture_parsesAndHashesMatch serves
+// testdata/remote (used for manual smoke tests) and checks that every
+// document parses and every hash matches.
+func TestClient_FetchAll_testdataFixture_parsesAndHashesMatch(t *testing.T) {
 	srv := httptest.NewServer(http.FileServer(http.Dir("../../testdata/remote")))
 	defer srv.Close()
 	c, err := NewClient(srv.URL, "0.1.0")

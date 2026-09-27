@@ -45,7 +45,7 @@ func newClient(t *testing.T, base string) *Client {
 	return c
 }
 
-func TestResolve(t *testing.T) {
+func TestClient_Resolve_variousRefs_resolvesOrRejectsInvalidSchemes(t *testing.T) {
 	c := newClient(t, "https://example.com/lib") // no trailing slash
 	cases := map[string]string{
 		"games.json":                    "https://example.com/lib/games.json",
@@ -75,7 +75,7 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestCompareVersions(t *testing.T) {
+func TestCompareVersions_variousVersionPairs_returnsOrderOrError(t *testing.T) {
 	cases := []struct {
 		a, b string
 		want int
@@ -100,7 +100,7 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
-func TestSchemaAndMinVersion(t *testing.T) {
+func TestClient_FetchGamesAndIndex_schemaOrMinVersionMismatch_returnsUpdateRequired(t *testing.T) {
 	srv := serve(t, map[string]string{
 		"games.json": `{"schema_version":2,"games":[]}`,
 		"index.json": `{"schema_version":1,"min_app_version":"9.0.0","packs":[]}`,
@@ -120,7 +120,7 @@ func TestSchemaAndMinVersion(t *testing.T) {
 	}
 }
 
-func TestFetchGamesAndIndex(t *testing.T) {
+func TestClient_FetchGamesAndIndex_validResponses_parsesGamesAndPacks(t *testing.T) {
 	srv := serve(t, map[string]string{
 		"games.json": `{"schema_version":1,"min_app_version":"0.1.0","unknown_field":true,"games":[
 			{"id":"valheim","name":"Valheim","strategy":"steam","steam":{"appid":892970},"not_found_hint":"hint",
@@ -157,7 +157,7 @@ func manifestJSON(loader string) string {
 	return strings.Replace(strings.Replace(strings.Replace(manifestTmpl, "%s", h, 1), "%s", h, 1), "%s", loader, 1)
 }
 
-func TestFetchManifest(t *testing.T) {
+func TestClient_FetchManifest_variousManifests_parsesOrRejects(t *testing.T) {
 	raw := manifestJSON(`,"loader":null`)
 	srv := serve(t, map[string]string{
 		"packs/p1.json":     raw,
@@ -210,7 +210,7 @@ func TestFetchManifest(t *testing.T) {
 	}
 }
 
-func TestDownload(t *testing.T) {
+func TestClient_Download_variousOutcomes_writesVerifiesOrRejects(t *testing.T) {
 	content := "hello world"
 	srv := serve(t, map[string]string{"files/f.bin": content})
 	c := newClient(t, srv.URL+"/lib/")
@@ -257,7 +257,7 @@ func TestDownload(t *testing.T) {
 	}
 }
 
-func TestTransientErrorsRetried(t *testing.T) {
+func TestClient_Download_transientServerErrors_retriesThenSucceeds(t *testing.T) {
 	content := []byte("payload")
 	var calls, missCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

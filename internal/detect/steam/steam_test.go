@@ -12,7 +12,7 @@ import (
 
 const fixtures = "../../../testdata/steam"
 
-func TestReadLibraryFoldersNewFormatEscapedPaths(t *testing.T) {
+func TestReadLibraryFolders_newFormatEscapedPaths_returnsUnescapedPaths(t *testing.T) {
 	got, err := ReadLibraryFolders(filepath.Join(fixtures, "libraryfolders_new.vdf"))
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestReadLibraryFoldersNewFormatEscapedPaths(t *testing.T) {
 	}
 }
 
-func TestReadLibraryFoldersOldFormat(t *testing.T) {
+func TestReadLibraryFolders_oldFormat_returnsPaths(t *testing.T) {
 	got, err := ReadLibraryFolders(filepath.Join(fixtures, "libraryfolders_old.vdf"))
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestReadLibraryFoldersOldFormat(t *testing.T) {
 	}
 }
 
-func TestReadInstallDir(t *testing.T) {
+func TestReadInstallDir_variousManifests_returnsNameOrError(t *testing.T) {
 	for file, want := range map[string]string{
 		"appmanifest_892970.acf": "Valheim",
 		"appmanifest_casing.acf": "Valheim Beta", // "appstate" / "InstallDir"
@@ -105,7 +105,7 @@ func linuxStrategy(home string) *Strategy {
 	return New(linuxRootCandidates(home), "linux")
 }
 
-func TestLinuxProtonDetected(t *testing.T) {
+func TestStrategy_Detect_linuxProtonBuild_returnsResultWithExtras(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	steamRoot, lib2 := fakeLinuxSteam(t, home, "valheim.exe", "valheim_Data/x")
@@ -137,7 +137,7 @@ func TestLinuxProtonDetected(t *testing.T) {
 	}
 }
 
-func TestLinuxNativeNotDetected(t *testing.T) {
+func TestStrategy_Detect_linuxNativeBuild_returnsNoResults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	fakeLinuxSteam(t, home, "valheim.x86_64", "valheim_Data/x") // native build: no valheim.exe
@@ -150,7 +150,7 @@ func TestLinuxNativeNotDetected(t *testing.T) {
 	}
 }
 
-func TestBrokenLibrarySkipped(t *testing.T) {
+func TestStrategy_Detect_corruptLibraryFolders_skipsAndContinuesWithOthers(t *testing.T) {
 	home := t.TempDir()
 	_, lib2 := fakeLinuxSteam(t, home, "valheim.exe")
 	// A second root with a corrupt libraryfolders.vdf must not break detection.
@@ -171,7 +171,7 @@ func TestBrokenLibrarySkipped(t *testing.T) {
 	}
 }
 
-func TestMissingAppIDIsError(t *testing.T) {
+func TestStrategy_Detect_missingSteamAppID_returnsError(t *testing.T) {
 	g := valheim
 	g.Steam = nil
 	if _, err := linuxStrategy(t.TempDir()).Detect(g); err == nil {

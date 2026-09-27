@@ -4,8 +4,9 @@ package steam
 
 import "testing"
 
-// TestDefaultRootsFromHOME runs the real Linux root discovery against a temp HOME.
-func TestDefaultRootsFromHOME(t *testing.T) {
+// TestDefaultRoots_realHOMEEnv_discoversSteamLibraries runs the real Linux
+// root discovery against a temp HOME.
+func TestDefaultRoots_realHOMEEnv_discoversSteamLibraries(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	fakeLinuxSteam(t, home, "valheim.exe")
