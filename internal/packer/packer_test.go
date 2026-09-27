@@ -27,16 +27,22 @@ func zipBytes(t *testing.T, files map[string]string) []byte {
 		if err != nil {
 			t.Fatal(err)
 		}
-		w.Write([]byte(content))
+		if _, err := w.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	zw.Close()
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return buf.Bytes()
 }
 
-func write(t *testing.T, p, content string) {
+func write(t *testing.T, path, content string) {
 	t.Helper()
-	os.MkdirAll(filepath.Dir(p), 0o755)
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -64,13 +70,13 @@ func newEnv(t *testing.T) *env {
 		"BepInExPack_Valheim/BepInEx/config/BepInEx.cfg": "cfg",
 	})
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ts/bep.zip", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ts/bep.zip", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/zip")
-		w.Write(bep)
+		_, _ = w.Write(bep)
 	})
-	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/login", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte("<html>sign in</html>"))
+		_, _ = w.Write([]byte("<html>sign in</html>"))
 	})
 	mux.Handle("/lib/", http.StripPrefix("/lib/", http.FileServer(http.Dir(e.lib))))
 	e.srv = httptest.NewServer(mux)
@@ -95,7 +101,7 @@ func (e *env) build(t *testing.T) (*Result, error) {
 	return (&Builder{}).Build(context.Background(), e.pack, e.lib)
 }
 
-func TestBuildThenInstallAndRemove(t *testing.T) {
+func TestBuilder_Build_thenInstallAndRemove_roundTrips(t *testing.T) {
 	e := newEnv(t)
 	e.meta(t, `, "preserve": ["BepInEx/config"]`)
 	write(t, filepath.Join(e.pack, "common", "BepInEx", "plugins", "Mod.dll"), "mod")
@@ -111,13 +117,13 @@ func TestBuildThenInstallAndRemove(t *testing.T) {
 	if !reflect.DeepEqual(res.Ignored, []string{"README.md"}) {
 		t.Errorf("ignored = %q", res.Ignored)
 	}
-	m := res.Manifest
-	if !reflect.DeepEqual(m.Preserve, []string{"BepInEx/config"}) {
-		t.Errorf("preserve = %q", m.Preserve)
+	manifest := res.Manifest
+	if !reflect.DeepEqual(manifest.Preserve, []string{"BepInEx/config"}) {
+		t.Errorf("preserve = %q", manifest.Preserve)
 	}
-	if len(m.Files["common"]) != 1 || len(m.Files["windows"]) != 2 || m.Files["windows"][0].Kind != remote.KindZip ||
-		m.Files["windows"][0].SHA256 == "" || m.Files["windows"][0].Size == 0 || len(m.Files["linux"]) != 0 {
-		t.Fatalf("manifest files = %+v", m.Files)
+	if len(manifest.Files["common"]) != 1 || len(manifest.Files["windows"]) != 2 || manifest.Files["windows"][0].Kind != remote.KindZip ||
+		manifest.Files["windows"][0].SHA256 == "" || manifest.Files["windows"][0].Size == 0 || len(manifest.Files["linux"]) != 0 {
+		t.Fatalf("manifest files = %+v", manifest.Files)
 	}
 	if len(res.Uploads) != 2 {
 		t.Errorf("uploads = %q, want the common and windows zips", res.Uploads)
@@ -138,22 +144,22 @@ func TestBuildThenInstallAndRemove(t *testing.T) {
 	}
 
 	// Install the built pack with the real engine from the served library.
-	c, err := remote.NewClient(e.srv.URL+"/lib/", "0.1.0")
+	client, err := remote.NewClient(e.srv.URL+"/lib/", "0.1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	ix, err := c.FetchIndex(ctx)
+	index, err := client.FetchIndex(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, ok := ix.Pack("friends-pack")
+	ref, ok := index.Pack("friends-pack")
 	if !ok || ref.Name != "Friends pack" || ref.Description != "Test" {
-		t.Fatalf("index = %+v", ix)
+		t.Fatalf("index = %+v", index)
 	}
 	root := filepath.Join(t.TempDir(), "Valheim")
 	write(t, filepath.Join(root, "valheim.exe"), "vanilla")
-	eng := engine.New(c, "0.1.0", engine.OSFiles{})
+	eng := engine.New(client, "0.1.0", engine.OSFiles{})
 	req := engine.InstallRequest{Game: detect.Result{GameID: "valheim", BuildID: "windows", RootDir: root}, FilesKey: "windows", Pack: ref}
 	if err := eng.Install(ctx, req, nil); err != nil {
 		t.Fatal(err)
@@ -181,7 +187,22 @@ func TestBuildThenInstallAndRemove(t *testing.T) {
 	}
 }
 
-func TestIndexUpsertKeepsOtherPacks(t *testing.T) {
+func TestBuilder_Build_withOut_writesProgressLines(t *testing.T) {
+	e := newEnv(t)
+	e.meta(t, "")
+
+	var out bytes.Buffer
+	b := &Builder{Out: &out}
+	if _, err := b.Build(context.Background(), e.pack, e.lib); err != nil {
+		t.Fatal(err)
+	}
+
+	if out.Len() == 0 {
+		t.Error("no progress output")
+	}
+}
+
+func TestBuilder_Build_existingIndexWithOtherPacks_upsertsWithoutLosingThem(t *testing.T) {
 	e := newEnv(t)
 	e.meta(t, "")
 	write(t, filepath.Join(e.lib, "index.json"), `{"schema_version":1,"min_app_version":"0.2.0","packs":[
@@ -190,29 +211,36 @@ func TestIndexUpsertKeepsOtherPacks(t *testing.T) {
 	if _, err := e.build(t); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := os.ReadFile(filepath.Join(e.lib, "index.json"))
+	raw, err := os.ReadFile(filepath.Join(e.lib, "index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var doc struct {
 		MinAppVersion string           `json:"min_app_version"`
 		Packs         []map[string]any `json:"packs"`
 	}
-	json.Unmarshal(raw, &doc)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
 	if doc.MinAppVersion != "0.2.0" || len(doc.Packs) != 2 || doc.Packs[0]["id"] != "other" ||
 		doc.Packs[1]["name"] != "Friends pack" || doc.Packs[1]["note"] != "kept" {
 		t.Errorf("index.json:\n%s", raw)
 	}
 }
 
-func TestBuildRejects(t *testing.T) {
+func TestBuilder_Build_invalidInput_fails(t *testing.T) {
 	cases := map[string]struct {
 		extra string
-		setup func(e *env)
+		setup func(t *testing.T, e *env)
 		want  string
 	}{
-		"duplicate target": {setup: func(e *env) {
-			os.WriteFile(filepath.Join(e.pack, "common", "winhttp.dll"), []byte("mine"), 0o644)
+		"duplicate target": {setup: func(t *testing.T, e *env) {
+			write(t, filepath.Join(e.pack, "common", "winhttp.dll"), "mine")
 		}, want: "written twice"},
-		"hash mismatch": {extra: `, "external": {"windows": [{"url": "URL/ts/bep.zip", "kind": "zip", "dest": "", "sha256": "` + strings.Repeat("0", 64) + `"}]}`,
-			want: "pack.modinst says"},
+		"hash mismatch": {
+			extra: `, "external": {"windows": [{"url": "URL/ts/bep.zip", "kind": "zip", "dest": "", "sha256": "` + strings.Repeat("0", 64) + `"}]}`,
+			want:  "pack.modinst says",
+		},
 		"html page":     {extra: `, "external": {"common": [{"url": "URL/login", "kind": "file", "dest": "x.dll"}]}`, want: "HTML page"},
 		"unknown field": {extra: `, "files": {}`, want: "unknown field"},
 		"unknown game":  {extra: `, "game_id": "minecraft"`, want: "not in"},
@@ -221,12 +249,11 @@ func TestBuildRejects(t *testing.T) {
 		"preserve root": {extra: `, "preserve": [""]`, want: "preserve"},
 		"preserve up":   {extra: `, "preserve": ["../x"]`, want: "preserve"},
 		"unknown list":  {extra: `, "external": {"macos": []}`, want: "unknown list"},
-		"marker in pack": {setup: func(e *env) {
-			os.WriteFile(filepath.Join(e.pack, "common", ".crackers-modinst.json"), []byte("{}"), 0o644)
+		"marker in pack": {setup: func(t *testing.T, e *env) {
+			write(t, filepath.Join(e.pack, "common", ".crackers-modinst.json"), "{}")
 		}, want: "must not contain"},
-		"staging folder in pack": {setup: func(e *env) {
-			os.MkdirAll(filepath.Join(e.pack, "common", ".crackers-modinst-old"), 0o755)
-			os.WriteFile(filepath.Join(e.pack, "common", ".crackers-modinst-old", "x.dll"), []byte("x"), 0o644)
+		"staging folder in pack": {setup: func(t *testing.T, e *env) {
+			write(t, filepath.Join(e.pack, "common", ".crackers-modinst-old", "x.dll"), "x")
 		}, want: "must not contain"},
 	}
 	for name, tc := range cases {
@@ -235,10 +262,9 @@ func TestBuildRejects(t *testing.T) {
 			// Later duplicate keys override earlier ones in encoding/json, so
 			// "extra" replaces fields of the base metadata.
 			e.meta(t, strings.ReplaceAll(tc.extra, "URL", e.srv.URL))
-			os.MkdirAll(filepath.Join(e.pack, "common"), 0o755)
 			write(t, filepath.Join(e.pack, "common", "BepInEx", "plugins", "Mod.dll"), "mod")
 			if tc.setup != nil {
-				tc.setup(e)
+				tc.setup(t, e)
 			}
 			_, err := e.build(t)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -251,24 +277,24 @@ func TestBuildRejects(t *testing.T) {
 	}
 }
 
-func TestInit(t *testing.T) {
+func TestInit_newPackDir_createsTemplateAndRejectsSecondCall(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "My Friends Pack")
-	p, err := Init(dir)
+	metaPath, err := Init(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := ReadMeta(dir)
+	meta, err := ReadMeta(dir)
 	if err != nil {
 		t.Fatalf("template does not validate: %v", err)
 	}
-	if m.ID != "my-friends-pack" || m.Name != "My Friends Pack" || m.GameID != "valheim" || len(m.External["windows"]) != 1 ||
-		!reflect.DeepEqual(m.Preserve, []string{"BepInEx/config"}) {
-		t.Errorf("meta = %+v", m)
+	if meta.ID != "my-friends-pack" || meta.Name != "My Friends Pack" || meta.GameID != "valheim" || len(meta.External["windows"]) != 1 ||
+		!reflect.DeepEqual(meta.Preserve, []string{"BepInEx/config"}) {
+		t.Errorf("meta = %+v", meta)
 	}
 	if fi, err := os.Stat(filepath.Join(dir, "common", "BepInEx", "plugins")); err != nil || !fi.IsDir() {
 		t.Error("plugins folder not created")
 	}
 	if _, err := Init(dir); err == nil {
-		t.Errorf("second init overwrote %s", p)
+		t.Errorf("second init overwrote %s", metaPath)
 	}
 }

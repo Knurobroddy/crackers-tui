@@ -1,4 +1,4 @@
-// Package packer builds pack manifests for the remote library (ADR §13).
+// Package packer builds pack manifests for the remote library.
 //
 // Input is a pack folder:
 //
@@ -40,11 +40,28 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
 )
 
-// MetaFileName is the pack metadata file inside a pack folder.
-const MetaFileName = "pack.modinst"
+const (
+	// MetaFileName is the pack metadata file inside a pack folder.
+	MetaFileName = "pack.modinst"
 
-// Lists are the pack folder's list subfolders, in manifest order.
-var Lists = []string{"common", "windows", "linux"}
+	dirPerm      fs.FileMode = 0o755
+	filePerm     fs.FileMode = 0o644
+	execFilePerm fs.FileMode = 0o755
+)
+
+var (
+	// Lists are the pack folder's list subfolders, in manifest order.
+	Lists = []string{"common", "windows", "linux"}
+
+	idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+	// junk files that are never packed.
+	junk = map[string]bool{"thumbs.db": true, "desktop.ini": true, ".ds_store": true}
+
+	// zipTime is the fixed timestamp for zip entries so identical input gives
+	// identical archives.
+	zipTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+)
 
 // Meta is the content of pack.modinst.
 type Meta struct {
@@ -64,14 +81,6 @@ type Meta struct {
 	External map[string][]remote.FileEntry `json:"external,omitempty"`
 }
 
-var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-
-// junk files that are never packed.
-var junk = map[string]bool{"thumbs.db": true, "desktop.ini": true, ".ds_store": true}
-
-// fixed timestamp for zip entries so identical input gives identical archives.
-var zipTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-
 // Result describes what Build wrote.
 type Result struct {
 	Manifest     *remote.Manifest
@@ -84,32 +93,93 @@ type Result struct {
 type Builder struct {
 	// Client downloads External files; remote.NewDownloader is used if nil.
 	Client *remote.Client
-	Logf   func(format string, args ...any)
+	// Out receives progress lines; io.Discard is used if nil.
+	Out io.Writer
 }
 
-func (b *Builder) logf(format string, args ...any) {
-	if b.Logf != nil {
-		b.Logf(format, args...)
-	}
+// packedUpload is a list's zip staged in the temp folder, pending upload to
+// the library's files/ folder.
+type packedUpload struct {
+	src  string
+	name string
+}
+
+// packedLists is what packLists produced: the manifest file entries and their
+// local copies (for install validation), keyed by list, plus the zips pending
+// upload.
+type packedLists struct {
+	files   map[string][]remote.FileEntry
+	local   map[string][]string
+	uploads []packedUpload
+}
+
+// zipEntry is a file or folder found while collecting one list's files, in
+// walk order.
+type zipEntry struct {
+	rel   string // relative, slash-separated, no trailing slash
+	isDir bool
+}
+
+// fileCollector accumulates the zipEntry values found while walking a list's
+// source folder.
+type fileCollector struct {
+	root    string
+	entries []zipEntry
+}
+
+// listBuilder packs the lists of one pack.modinst, holding what every list
+// needs: the downloader, the pack metadata and the folders involved.
+type listBuilder struct {
+	*Builder
+	meta    *Meta
+	packDir string
+	tempDir string
 }
 
 // ReadMeta reads and validates <packDir>/pack.modinst.
 func ReadMeta(packDir string) (*Meta, error) {
-	p := filepath.Join(packDir, MetaFileName)
-	raw, err := os.ReadFile(p)
+	metaPath := filepath.Join(packDir, MetaFileName)
+	raw, err := os.ReadFile(metaPath)
 	if err != nil {
 		return nil, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var m Meta
-	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("%s: %w", p, err)
+	var meta Meta
+	if err := dec.Decode(&meta); err != nil {
+		return nil, fmt.Errorf("%s: %w", metaPath, err)
 	}
-	if err := m.validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", p, err)
+	if err := meta.validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", metaPath, err)
 	}
-	return &m, nil
+	return &meta, nil
+}
+
+// Build packs packDir into libraryDir.
+func (b *Builder) Build(ctx context.Context, packDir, libraryDir string) (*Result, error) {
+	meta, ignored, err := b.readInputs(packDir, libraryDir)
+	if err != nil {
+		return nil, err
+	}
+	tempDir, err := os.MkdirTemp("", "modinst-pack-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	packed, err := b.packLists(ctx, meta, packDir, tempDir)
+	if err != nil {
+		return nil, err
+	}
+	manifest := assembleManifest(meta, packed.files)
+	if err := validateManifest(manifest, packed.local); err != nil {
+		return nil, err
+	}
+	res := &Result{Manifest: manifest, Ignored: ignored}
+	if err := writeOutputs(libraryDir, meta, packed.uploads, res); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func (m *Meta) validate() error {
@@ -123,22 +193,17 @@ func (m *Meta) validate() error {
 	case m.Version == "":
 		return errors.New("version is required")
 	}
-	for field, paths := range map[string][]string{"owned_dirs": m.OwnedDirs, "preserve": m.Preserve} {
-		for _, d := range paths {
-			c, err := pathsafe.Clean(d)
-			if err != nil {
-				return fmt.Errorf("%s: %w", field, err)
-			}
-			if c == "" {
-				return fmt.Errorf("%s: %q is the game directory itself", field, d)
-			}
-		}
+	if err := validateRelPaths("owned_dirs", m.OwnedDirs); err != nil {
+		return err
 	}
-	for i, h := range m.Hooks {
-		if _, err := hooks.New(h.Type, h.Raw); err != nil {
+	if err := validateRelPaths("preserve", m.Preserve); err != nil {
+		return err
+	}
+	for i, hook := range m.Hooks {
+		if _, err := hooks.New(hook.Type, hook.Raw); err != nil {
 			return fmt.Errorf("hooks[%d]: %w", i, err)
 		}
-		if len(h.Builds) == 0 {
+		if len(hook.Builds) == 0 {
 			return fmt.Errorf("hooks[%d]: builds is empty, so the hook would never run", i)
 		}
 	}
@@ -146,13 +211,28 @@ func (m *Meta) validate() error {
 		if !isList(list) {
 			return fmt.Errorf("external: unknown list %q (use common, windows or linux)", list)
 		}
-		for i, fe := range entries {
-			if fe.URL == "" || (fe.Kind != remote.KindFile && fe.Kind != remote.KindZip) {
+		for i, entry := range entries {
+			if entry.URL == "" || (entry.Kind != remote.KindFile && entry.Kind != remote.KindZip) {
 				return fmt.Errorf("external.%s[%d]: url and kind (file or zip) are required", list, i)
 			}
-			if fe.Kind == remote.KindFile && fe.Dest == "" {
+			if entry.Kind == remote.KindFile && entry.Dest == "" {
 				return fmt.Errorf("external.%s[%d]: kind file needs dest", list, i)
 			}
+		}
+	}
+	return nil
+}
+
+// validateRelPaths checks that every path in a Meta field (owned_dirs or
+// preserve) is a clean path inside the game directory.
+func validateRelPaths(field string, paths []string) error {
+	for _, rawPath := range paths {
+		clean, err := pathsafe.Clean(rawPath)
+		if err != nil {
+			return fmt.Errorf("%s: %w", field, err)
+		}
+		if clean == "" {
+			return fmt.Errorf("%s: %q is the game directory itself", field, rawPath)
 		}
 	}
 	return nil
@@ -167,85 +247,250 @@ func isList(s string) bool {
 	return false
 }
 
-// Build packs packDir into libraryDir.
-func (b *Builder) Build(ctx context.Context, packDir, libraryDir string) (*Result, error) {
+func (b *Builder) out() io.Writer {
+	if b.Out == nil {
+		return io.Discard
+	}
+	return b.Out
+}
+
+func (b *Builder) logf(format string, args ...any) {
+	_, _ = fmt.Fprintf(b.out(), format+"\n", args...)
+}
+
+// readInputs reads pack.modinst, lists the pack folder's ignored entries and
+// checks game_id against the library's games.json.
+func (b *Builder) readInputs(packDir, libraryDir string) (*Meta, []string, error) {
 	meta, err := ReadMeta(packDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := checkGame(libraryDir, meta.GameID, b); err != nil {
-		return nil, err
-	}
-	tmp, err := os.MkdirTemp("", "modinst-pack-*")
+	ignored, err := ignoredEntries(packDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer os.RemoveAll(tmp)
-
-	res := &Result{}
-	if res.Ignored, err = ignoredEntries(packDir); err != nil {
-		return nil, err
+	if err := b.checkGame(libraryDir, meta.GameID); err != nil {
+		return nil, nil, err
 	}
+	return meta, ignored, nil
+}
 
-	files := map[string][]remote.FileEntry{}
-	local := map[string][]string{} // local copies, parallel to files
-	type upload struct{ src, name string }
-	var uploads []upload
+// checkGame verifies gameID against <library>/games.json when it exists.
+func (b *Builder) checkGame(libraryDir, gameID string) error {
+	gamesPath := filepath.Join(libraryDir, "games.json")
+	raw, err := os.ReadFile(gamesPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		b.logf("warning: %s has no games.json; game_id %q is not checked", libraryDir, gameID)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var games remote.Games
+	if err := json.Unmarshal(raw, &games); err != nil {
+		return fmt.Errorf("games.json: %w", err)
+	}
+	if _, ok := games.Game(gameID); !ok {
+		return fmt.Errorf("game_id %q is not in %s", gameID, gamesPath)
+	}
+	return nil
+}
 
+// packLists resolves each list's external entries and zips its folder, in
+// Lists order.
+func (b *Builder) packLists(ctx context.Context, meta *Meta, packDir, tempDir string) (*packedLists, error) {
+	lb := &listBuilder{Builder: b, meta: meta, packDir: packDir, tempDir: tempDir}
+	packed := &packedLists{files: map[string][]remote.FileEntry{}, local: map[string][]string{}}
 	for _, list := range Lists {
-		for i, fe := range meta.External[list] {
-			dst := filepath.Join(tmp, fmt.Sprintf("ext-%s-%d", list, i))
-			b.logf("downloading %s", fe.URL)
-			sum, size, err := b.fetch(ctx, fe.URL, dst)
-			if err != nil {
-				return nil, fmt.Errorf("external.%s[%d]: %w", list, i, err)
-			}
-			if fe.SHA256 != "" && !strings.EqualFold(fe.SHA256, sum) {
-				return nil, fmt.Errorf("external.%s[%d]: %s has sha256 %s, pack.modinst says %s", list, i, fe.URL, sum, fe.SHA256)
-			}
-			if fe.Size > 0 && fe.Size != size {
-				return nil, fmt.Errorf("external.%s[%d]: %s has %d bytes, pack.modinst says %d", list, i, fe.URL, size, fe.Size)
-			}
-			fe.SHA256, fe.Size = sum, size
-			files[list] = append(files[list], fe)
-			local[list] = append(local[list], dst)
-		}
-
-		dir := filepath.Join(packDir, list)
-		zipPath := filepath.Join(tmp, list+".zip")
-		n, err := zipDir(dir, zipPath)
-		if err != nil {
+		if err := lb.resolveExternal(ctx, list, packed); err != nil {
 			return nil, err
 		}
-		if n == 0 {
-			continue
-		}
-		sum, size, err := hashFile(zipPath)
-		if err != nil {
+		if err := lb.packList(list, packed); err != nil {
 			return nil, err
 		}
-		name := fmt.Sprintf("%s-%s-%s.zip", meta.ID, list, sum[:12])
-		files[list] = append(files[list], remote.FileEntry{
-			URL: "files/" + name, SHA256: sum, Size: size, Kind: remote.KindZip, Dest: "",
-		})
-		local[list] = append(local[list], zipPath)
-		uploads = append(uploads, upload{zipPath, name})
-		b.logf("packed %s/ (%d files) -> files/%s", list, n, name)
 	}
-	if len(files) == 0 {
+	if len(packed.files) == 0 {
 		return nil, fmt.Errorf("%s: nothing to pack: add files under common/, windows/ or linux/, or external entries", packDir)
 	}
+	return packed, nil
+}
 
-	// Validate every combination a build can select: common alone and common + each list.
-	for _, list := range Lists {
-		entries := append(append([]remote.FileEntry(nil), files["common"]...), extraList(files, list)...)
-		copies := append(append([]string(nil), local["common"]...), extraList(local, list)...)
-		if err := engine.ValidateFiles(entries, copies); err != nil {
-			return nil, fmt.Errorf("pack would not install (files list %q): %w", list, err)
+// resolveExternal downloads list's external entries, verifies their declared
+// sha256 and size (if given) and records the verified entries in packed.
+func (lb *listBuilder) resolveExternal(ctx context.Context, list string, packed *packedLists) error {
+	for i, entry := range lb.meta.External[list] {
+		dst := filepath.Join(lb.tempDir, fmt.Sprintf("ext-%s-%d", list, i))
+		lb.logf("downloading %s", entry.URL)
+		sum, size, err := lb.fetch(ctx, entry.URL, dst)
+		if err != nil {
+			return fmt.Errorf("external.%s[%d]: %w", list, i, err)
+		}
+		if entry.SHA256 != "" && !strings.EqualFold(entry.SHA256, sum) {
+			return fmt.Errorf("external.%s[%d]: %s has sha256 %s, pack.modinst says %s", list, i, entry.URL, sum, entry.SHA256)
+		}
+		if entry.Size > 0 && entry.Size != size {
+			return fmt.Errorf("external.%s[%d]: %s has %d bytes, pack.modinst says %d", list, i, entry.URL, size, entry.Size)
+		}
+		entry.SHA256, entry.Size = sum, size
+		packed.files[list] = append(packed.files[list], entry)
+		packed.local[list] = append(packed.local[list], dst)
+	}
+	return nil
+}
+
+// packList zips lb.packDir/list into a deterministic archive and records it
+// in packed, unless the list has no files to pack.
+func (lb *listBuilder) packList(list string, packed *packedLists) error {
+	dir := filepath.Join(lb.packDir, list)
+	paths, err := collectFiles(dir)
+	if err != nil {
+		return err
+	}
+	fileCount := 0
+	for _, rel := range paths {
+		if !isZipDirEntry(rel) {
+			fileCount++
 		}
 	}
+	if fileCount == 0 {
+		return nil
+	}
+	zipPath := filepath.Join(lb.tempDir, list+".zip")
+	if err := writeZip(zipPath, dir, paths); err != nil {
+		return err
+	}
+	sum, size, err := hashFile(zipPath)
+	if err != nil {
+		return err
+	}
+	name := fmt.Sprintf("%s-%s-%s.zip", lb.meta.ID, list, sum[:12])
+	packed.files[list] = append(packed.files[list], remote.FileEntry{
+		URL: "files/" + name, SHA256: sum, Size: size, Kind: remote.KindZip, Dest: "",
+	})
+	packed.local[list] = append(packed.local[list], zipPath)
+	packed.uploads = append(packed.uploads, packedUpload{zipPath, name})
+	lb.logf("packed %s/ (%d files) -> files/%s", list, fileCount, name)
+	return nil
+}
 
-	m := &remote.Manifest{
+// collectFiles walks dir and returns the relative, slash-separated entries to
+// zip, sorted for determinism; folders are suffixed with "/". A missing dir
+// returns nil.
+func collectFiles(dir string) ([]string, error) {
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	collector := &fileCollector{root: dir}
+	if err := filepath.WalkDir(dir, collector.visit); err != nil {
+		return nil, err
+	}
+	sort.Slice(collector.entries, func(i, j int) bool { return collector.entries[i].rel < collector.entries[j].rel })
+
+	paths := make([]string, len(collector.entries))
+	for i, entry := range collector.entries {
+		paths[i] = entry.rel
+		if entry.isDir {
+			paths[i] += "/"
+		}
+	}
+	return paths, nil
+}
+
+func (c *fileCollector) visit(p string, d fs.DirEntry, err error) error {
+	if err != nil {
+		return err
+	}
+	if p == c.root {
+		return nil
+	}
+	rel, err := filepath.Rel(c.root, p)
+	if err != nil {
+		return err
+	}
+	rel = filepath.ToSlash(rel)
+	if junk[strings.ToLower(d.Name())] {
+		return nil
+	}
+	if d.Type()&fs.ModeSymlink != 0 || (!d.IsDir() && !d.Type().IsRegular()) {
+		return fmt.Errorf("%s: only regular files and folders can be packed", p)
+	}
+	clean, err := pathsafe.Clean(rel)
+	if err != nil || clean != rel {
+		return fmt.Errorf("%s: unsupported file name", p)
+	}
+	if strings.EqualFold(rel, config.MarkerFileName) {
+		return fmt.Errorf("%s: the pack must not contain %s", p, config.MarkerFileName)
+	}
+	c.entries = append(c.entries, zipEntry{rel: rel, isDir: d.IsDir()})
+	return nil
+}
+
+// isZipDirEntry reports whether a path returned by collectFiles is a folder
+// (folders are suffixed with "/").
+func isZipDirEntry(rel string) bool {
+	return strings.HasSuffix(rel, "/")
+}
+
+// writeZip writes a deterministic zip of paths (as returned by collectFiles)
+// resolved against dir: sorted entries, fixed timestamps, normalized modes.
+func writeZip(zipPath, dir string, paths []string) error {
+	out, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+
+	zw := zip.NewWriter(out)
+	for _, rel := range paths {
+		if err := writeZipEntry(zw, dir, rel); err != nil {
+			return err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+// writeZipEntry writes one collectFiles entry (a file or, for a folder, an
+// empty directory entry) to zw.
+func writeZipEntry(zw *zip.Writer, dir, rel string) error {
+	isDir := isZipDirEntry(rel)
+	abs := filepath.Join(dir, filepath.FromSlash(strings.TrimSuffix(rel, "/")))
+	mode := filePerm
+	switch {
+	case isDir:
+		mode = fs.ModeDir | dirPerm
+	default:
+		if fi, err := os.Stat(abs); err == nil && fi.Mode().Perm()&0o111 != 0 {
+			mode = execFilePerm
+		}
+	}
+	h := &zip.FileHeader{Name: rel, Method: zip.Deflate, Modified: zipTime}
+	if isDir {
+		h.Method = zip.Store
+	}
+	h.SetMode(mode)
+	w, err := zw.CreateHeader(h)
+	if err != nil {
+		return err
+	}
+	if isDir {
+		return nil
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = io.Copy(w, f)
+	return err
+}
+
+// assembleManifest builds the remote manifest from meta and the file entries
+// packLists produced.
+func assembleManifest(meta *Meta, files map[string][]remote.FileEntry) *remote.Manifest {
+	return &remote.Manifest{
 		SchemaVersion: config.ManifestSchemaVersion,
 		ID:            meta.ID,
 		GameID:        meta.GameID,
@@ -256,34 +501,19 @@ func (b *Builder) Build(ctx context.Context, packDir, libraryDir string) (*Resul
 		Files:         files,
 		Hooks:         append([]remote.HookSpec{}, meta.Hooks...),
 	}
-	if err := m.Validate(); err != nil {
-		return nil, err
-	}
-	raw, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	raw = append(raw, '\n')
+}
 
-	for _, u := range uploads {
-		dst := filepath.Join(libraryDir, "files", u.name)
-		if _, err := os.Stat(dst); err == nil {
-			continue // content-addressed name: already there
+// validateManifest checks every combination a build can select (common alone
+// and common + each list) against the engine, then the manifest's own rules.
+func validateManifest(manifest *remote.Manifest, local map[string][]string) error {
+	for _, list := range Lists {
+		entries := append(append([]remote.FileEntry(nil), manifest.Files["common"]...), extraList(manifest.Files, list)...)
+		copies := append(append([]string(nil), local["common"]...), extraList(local, list)...)
+		if err := engine.ValidateFiles(entries, copies); err != nil {
+			return fmt.Errorf("pack would not install (files list %q): %w", list, err)
 		}
-		if err := copyFile(u.src, dst); err != nil {
-			return nil, err
-		}
-		res.Uploads = append(res.Uploads, dst)
 	}
-	res.ManifestPath = filepath.Join(libraryDir, "packs", meta.ID+".json")
-	if err := writeFile(res.ManifestPath, raw); err != nil {
-		return nil, err
-	}
-	if err := upsertIndex(filepath.Join(libraryDir, "index.json"), meta); err != nil {
-		return nil, err
-	}
-	res.Manifest = m
-	return res, nil
+	return manifest.Validate()
 }
 
 // extraList returns the list m[list] that a build adds on top of "common"
@@ -295,6 +525,32 @@ func extraList[T any](m map[string][]T, list string) []T {
 	return m[list]
 }
 
+// writeOutputs writes the manifest JSON, uploads new or changed zips and
+// upserts the library's index.json, filling res.Uploads and res.ManifestPath.
+func writeOutputs(libraryDir string, meta *Meta, uploads []packedUpload, res *Result) error {
+	raw, err := json.MarshalIndent(res.Manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+
+	for _, u := range uploads {
+		dst := filepath.Join(libraryDir, "files", u.name)
+		if _, err := os.Stat(dst); err == nil {
+			continue // content-addressed name: already there
+		}
+		if err := copyFile(u.src, dst); err != nil {
+			return err
+		}
+		res.Uploads = append(res.Uploads, dst)
+	}
+	res.ManifestPath = filepath.Join(libraryDir, "packs", meta.ID+".json")
+	if err := writeFile(res.ManifestPath, raw); err != nil {
+		return err
+	}
+	return upsertIndex(filepath.Join(libraryDir, "index.json"), meta)
+}
+
 // ignoredEntries lists top-level entries of the pack folder that are not packed.
 func ignoredEntries(packDir string) ([]string, error) {
 	entries, err := os.ReadDir(packDir)
@@ -302,126 +558,13 @@ func ignoredEntries(packDir string) ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	for _, e := range entries {
-		if e.Name() == MetaFileName || (e.IsDir() && isList(e.Name())) {
+	for _, entry := range entries {
+		if entry.Name() == MetaFileName || (entry.IsDir() && isList(entry.Name())) {
 			continue
 		}
-		out = append(out, e.Name())
+		out = append(out, entry.Name())
 	}
 	return out, nil
-}
-
-// checkGame verifies game_id against <library>/games.json when it exists.
-func checkGame(libraryDir, gameID string, b *Builder) error {
-	raw, err := os.ReadFile(filepath.Join(libraryDir, "games.json"))
-	if errors.Is(err, fs.ErrNotExist) {
-		b.logf("warning: %s has no games.json; game_id %q is not checked", libraryDir, gameID)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var g remote.Games
-	if err := json.Unmarshal(raw, &g); err != nil {
-		return fmt.Errorf("games.json: %w", err)
-	}
-	if _, ok := g.Game(gameID); !ok {
-		return fmt.Errorf("game_id %q is not in %s", gameID, filepath.Join(libraryDir, "games.json"))
-	}
-	return nil
-}
-
-// zipDir writes a deterministic zip of dir (sorted entries, fixed times,
-// normalized modes) and returns the number of files. A missing dir packs nothing.
-func zipDir(dir, zipPath string) (int, error) {
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		return 0, nil
-	}
-	type item struct {
-		rel  string
-		abs  string
-		dir  bool
-		mode os.FileMode
-	}
-	var items []item
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if p == dir {
-			return nil
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if junk[strings.ToLower(d.Name())] {
-			return nil
-		}
-		if d.Type()&fs.ModeSymlink != 0 || (!d.IsDir() && !d.Type().IsRegular()) {
-			return fmt.Errorf("%s: only regular files and folders can be packed", p)
-		}
-		clean, err := pathsafe.Clean(rel)
-		if err != nil || clean != rel {
-			return fmt.Errorf("%s: unsupported file name", p)
-		}
-		if strings.EqualFold(rel, config.MarkerFileName) {
-			return fmt.Errorf("%s: the pack must not contain %s", p, config.MarkerFileName)
-		}
-		mode := os.FileMode(0o644)
-		if d.IsDir() {
-			mode = fs.ModeDir | 0o755
-		} else if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o111 != 0 {
-			mode = 0o755
-		}
-		items = append(items, item{rel: rel, abs: p, dir: d.IsDir(), mode: mode})
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].rel < items[j].rel })
-
-	out, err := os.Create(zipPath)
-	if err != nil {
-		return 0, err
-	}
-	defer out.Close()
-	zw := zip.NewWriter(out)
-	n := 0
-	for _, it := range items {
-		name := it.rel
-		if it.dir {
-			name += "/"
-		}
-		h := &zip.FileHeader{Name: name, Method: zip.Deflate, Modified: zipTime}
-		if it.dir {
-			h.Method = zip.Store
-		}
-		h.SetMode(it.mode)
-		w, err := zw.CreateHeader(h)
-		if err != nil {
-			return 0, err
-		}
-		if it.dir {
-			continue
-		}
-		f, err := os.Open(it.abs)
-		if err != nil {
-			return 0, err
-		}
-		_, err = io.Copy(w, f)
-		f.Close()
-		if err != nil {
-			return 0, err
-		}
-		n++
-	}
-	if err := zw.Close(); err != nil {
-		return 0, err
-	}
-	return n, out.Close()
 }
 
 // fetch downloads rawURL to dst and returns its sha256 and size.
@@ -435,31 +578,31 @@ func (b *Builder) fetch(ctx context.Context, rawURL, dst string) (string, int64,
 	return b.Client.Fetch(ctx, rawURL, dst)
 }
 
-func hashFile(p string) (string, int64, error) {
-	f, err := os.Open(p)
+func hashFile(filePath string) (string, int64, error) {
+	f, err := os.Open(filePath)
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	return hex.EncodeToString(h.Sum(nil)), n, err
 }
 
 func copyFile(src, dst string) error {
-	b, err := os.ReadFile(src)
+	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return writeFile(dst, b)
+	return writeFile(dst, data)
 }
 
-// writeFile creates p's folder and writes p atomically.
-func writeFile(p string, b []byte) error {
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+// writeFile creates filePath's folder and writes filePath atomically.
+func writeFile(filePath string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(filePath), dirPerm); err != nil {
 		return err
 	}
-	return fsutil.WriteAtomic(p, b, 0o644)
+	return fsutil.WriteAtomic(filePath, data, filePerm)
 }
 
 // upsertIndex adds or replaces the pack's entry in index.json, keeping all
@@ -479,8 +622,8 @@ func upsertIndex(indexPath string, meta *Meta) error {
 		}
 	}
 	var packs []any
-	if p, ok := doc["packs"].([]any); ok {
-		packs = p
+	if existing, ok := doc["packs"].([]any); ok {
+		packs = existing
 	}
 	entry := map[string]any{
 		"id":          meta.ID,
@@ -490,12 +633,12 @@ func upsertIndex(indexPath string, meta *Meta) error {
 		"manifest":    path.Join("packs", meta.ID+".json"),
 	}
 	replaced := false
-	for i, p := range packs {
-		if pm, ok := p.(map[string]any); ok && pm["id"] == meta.ID {
+	for i, existing := range packs {
+		if existingMap, ok := existing.(map[string]any); ok && existingMap["id"] == meta.ID {
 			for k, v := range entry {
-				pm[k] = v // keep unknown fields of the existing entry
+				existingMap[k] = v // keep unknown fields of the existing entry
 			}
-			packs[i] = pm
+			packs[i] = existingMap
 			replaced = true
 		}
 	}
