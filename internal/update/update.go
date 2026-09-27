@@ -40,20 +40,6 @@ func New(current string) (*Updater, error) {
 	return newUpdater(current, source, runtime.GOOS, runtime.GOARCH)
 }
 
-func newUpdater(current string, source selfupdate.Source, goos, arch string) (*Updater, error) {
-	selfupdate.SetLogger(slog.NewLogLogger(slog.Default().Handler(), slog.LevelDebug))
-	up, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:    source,
-		Validator: &selfupdate.ChecksumValidator{UniqueFilename: config.ChecksumsAsset},
-		OS:        goos,
-		Arch:      arch,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Updater{current: current, source: source, up: up, goos: goos, arch: arch}, nil
-}
-
 // Enabled reports whether update checks make sense for this build: not a dev
 // build.
 func Enabled(current string) bool {
@@ -86,6 +72,30 @@ func (u *Updater) Apply(ctx context.Context, r *Release) error {
 		return err
 	}
 	return u.applyTo(ctx, r, exe)
+}
+
+// CleanupOld removes the hidden ".<exe>.old" file that a previous update on
+// Windows could not delete while the old process was still running.
+func CleanupOld() {
+	exe, err := selfupdate.ExecutablePath()
+	if err != nil {
+		return
+	}
+	_ = os.Remove(filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".old"))
+}
+
+func newUpdater(current string, source selfupdate.Source, goos, arch string) (*Updater, error) {
+	selfupdate.SetLogger(slog.NewLogLogger(slog.Default().Handler(), slog.LevelDebug))
+	up, err := selfupdate.NewUpdater(selfupdate.Config{
+		Source:    source,
+		Validator: &selfupdate.ChecksumValidator{UniqueFilename: config.ChecksumsAsset},
+		OS:        goos,
+		Arch:      arch,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Updater{current: current, source: source, up: up, goos: goos, arch: arch}, nil
 }
 
 // applyTo downloads the release archive, validates it against checksums.txt
@@ -123,14 +133,4 @@ func (u *Updater) download(ctx context.Context, rel *selfupdate.Release, assetID
 	}
 	defer func() { _ = rc.Close() }()
 	return io.ReadAll(rc)
-}
-
-// CleanupOld removes the hidden ".<exe>.old" file that a previous update on
-// Windows could not delete while the old process was still running.
-func CleanupOld() {
-	exe, err := selfupdate.ExecutablePath()
-	if err != nil {
-		return
-	}
-	_ = os.Remove(filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".old"))
 }
