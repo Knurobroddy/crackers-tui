@@ -12,7 +12,6 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/fsutil"
-	"github.com/Knurobroddy/crackers-tui/internal/logx"
 )
 
 const (
@@ -54,31 +53,30 @@ func newProtonDLLOverride(raw json.RawMessage) (Hook, error) {
 // FindUserReg returns <library>/steamapps/compatdata/<appid>/pfx/user.reg,
 // looking in the game's own library first and then in all Steam libraries.
 func FindUserReg(extra map[string]string) (string, error) {
-	appid := extra[detect.ExtraSteamAppID]
-	if appid == "" {
-		return "", fmt.Errorf("%s needs a Steam game (no steam_appid in detection data)", protonDLLOverrideType)
+	appID := extra[detect.ExtraSteamAppID]
+	if appID == "" {
+		return "", fmt.Errorf("find user.reg: missing steam app id in detection data")
 	}
-	libs := []string{}
-	if lib := extra[detect.ExtraSteamLibrary]; lib != "" {
-		libs = append(libs, lib)
+	var libraries []string
+	if library := extra[detect.ExtraSteamLibrary]; library != "" {
+		libraries = append(libraries, library)
 	}
-	libs = append(libs, filepath.SplitList(extra[detect.ExtraSteamLibraries])...)
-	for _, lib := range libs {
-		p := filepath.Join(lib, "steamapps", "compatdata", appid, "pfx", "user.reg")
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-			return p, nil
+	libraries = append(libraries, filepath.SplitList(extra[detect.ExtraSteamLibraries])...)
+	for _, library := range libraries {
+		path := filepath.Join(library, "steamapps", "compatdata", appID, "pfx", "user.reg")
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			return path, nil
 		}
 	}
-	return "", fmt.Errorf("The Proton prefix for this game was not found (steamapps/compatdata/%s/pfx/user.reg). "+
-		"Launch the game once via Steam (Proton), close it, then retry.", appid)
+	return "", fmt.Errorf("find user.reg for app %s: %w", appID, ErrPrefixNotFound)
 }
 
 func (h *protonDLLOverride) Validate(ctx HookCtx) error {
-	p, err := FindUserReg(ctx.Extra)
+	path, err := FindUserReg(ctx.Extra)
 	if err != nil {
 		return err
 	}
-	h.regPath = p
+	h.regPath = path
 	return nil
 }
 
@@ -88,8 +86,7 @@ func (h *protonDLLOverride) Apply(ctx HookCtx) ([]UndoAction, error) {
 			return nil, err
 		}
 	}
-	log := logx.OrDiscard(ctx.Log)
-	fi, err := os.Stat(h.regPath)
+	info, err := os.Stat(h.regPath)
 	if err != nil {
 		return nil, err
 	}
@@ -98,8 +95,8 @@ func (h *protonDLLOverride) Apply(ctx HookCtx) ([]UndoAction, error) {
 		return nil, err
 	}
 	backup := h.regPath + config.BakSuffix
-	if err := os.WriteFile(backup, data, fi.Mode().Perm()); err != nil {
-		return nil, fmt.Errorf("could not back up %s: %w", h.regPath, err)
+	if err := os.WriteFile(backup, data, info.Mode().Perm()); err != nil {
+		return nil, fmt.Errorf("back up %s: %w", h.regPath, err)
 	}
 	out, prev, err := SetRegValue(data, dllOverridesSection, h.DLL, h.Mode, time.Now().Unix())
 	if err != nil {
@@ -111,10 +108,10 @@ func (h *protonDLLOverride) Apply(ctx HookCtx) ([]UndoAction, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := fsutil.WriteAtomic(h.regPath, out, fi.Mode().Perm()); err != nil {
-		return nil, fmt.Errorf("could not write %s: %w", h.regPath, err)
+	if err := fsutil.WriteAtomic(h.regPath, out, info.Mode().Perm()); err != nil {
+		return nil, fmt.Errorf("write %s: %w", h.regPath, err)
 	}
-	log.Info("set Wine DLL override", "file", h.regPath, "dll", h.DLL, "mode", h.Mode, "previous", prev, "backup", backup)
+	slog.Debug("set wine dll override", "path", h.regPath, "dll", h.DLL, "mode", h.Mode, "previous", prev, "backup", backup)
 	return []UndoAction{undo}, nil
 }
 
@@ -127,37 +124,37 @@ type wineRegRestore struct {
 	Previous *string `json:"previous"` // null: the value did not exist
 }
 
-func runWineRegRestore(raw json.RawMessage, log *slog.Logger) error {
-	var u wineRegRestore
-	if err := json.Unmarshal(raw, &u); err != nil {
+func runWineRegRestore(raw json.RawMessage) error {
+	var undo wineRegRestore
+	if err := json.Unmarshal(raw, &undo); err != nil {
 		return fmt.Errorf("invalid %s action: %w", wineRegRestoreOp, err)
 	}
-	if u.File == "" || u.Section == "" || u.Name == "" {
+	if undo.File == "" || undo.Section == "" || undo.Name == "" {
 		return fmt.Errorf("invalid %s action: missing file, section or name", wineRegRestoreOp)
 	}
-	fi, err := os.Stat(u.File)
+	info, err := os.Stat(undo.File)
 	if os.IsNotExist(err) {
 		// The prefix is gone (e.g. the game was uninstalled): nothing to restore.
-		log.Warn("registry file to restore no longer exists; skipping", "file", u.File)
+		slog.Warn("registry file to restore no longer exists; skipping", "path", undo.File)
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(u.File)
+	data, err := os.ReadFile(undo.File)
 	if err != nil {
 		return err
 	}
-	out, err := RestoreRegValue(data, u.Section, u.Name, u.Previous)
+	out, err := RestoreRegValue(data, undo.Section, undo.Name, undo.Previous)
 	if err != nil {
 		return err
 	}
 	if string(out) == string(data) {
 		return nil
 	}
-	if err := fsutil.WriteAtomic(u.File, out, fi.Mode().Perm()); err != nil {
-		return fmt.Errorf("could not write %s: %w", u.File, err)
+	if err := fsutil.WriteAtomic(undo.File, out, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("write %s: %w", undo.File, err)
 	}
-	log.Info("restored Wine registry value", "file", u.File, "name", u.Name, "previous", u.Previous)
+	slog.Debug("restored wine registry value", "path", undo.File, "name", undo.Name, "previous", undo.Previous)
 	return nil
 }

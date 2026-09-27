@@ -62,7 +62,7 @@ func (e *Engine) Remove(ctx context.Context, root string, progress ProgressFunc)
 		}
 		log.Info("deleted owned directory", "path", p)
 	}
-	if err := runUndo(mk.Undo, log); err != nil {
+	if err := runUndo(mk.Undo); err != nil {
 		errs = append(errs, err)
 	}
 	dirs := append([]string(nil), mk.DirsCreated...)

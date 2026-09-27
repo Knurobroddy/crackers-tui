@@ -21,30 +21,30 @@ type regLine struct {
 
 func splitLines(data []byte) []regLine {
 	var lines []regLine
-	s := string(data)
-	for len(s) > 0 {
-		i := strings.IndexByte(s, '\n')
+	remaining := string(data)
+	for len(remaining) > 0 {
+		i := strings.IndexByte(remaining, '\n')
 		if i < 0 {
-			lines = append(lines, regLine{text: s})
+			lines = append(lines, regLine{text: remaining})
 			break
 		}
-		text, eol := s[:i], "\n"
+		text, eol := remaining[:i], "\n"
 		if strings.HasSuffix(text, "\r") {
 			text, eol = text[:len(text)-1], "\r\n"
 		}
 		lines = append(lines, regLine{text: text, eol: eol})
-		s = s[i+1:]
+		remaining = remaining[i+1:]
 	}
 	return lines
 }
 
 func joinLines(lines []regLine) []byte {
-	var b bytes.Buffer
-	for _, l := range lines {
-		b.WriteString(l.text)
-		b.WriteString(l.eol)
+	var buf bytes.Buffer
+	for _, line := range lines {
+		buf.WriteString(line.text)
+		buf.WriteString(line.eol)
 	}
-	return b.Bytes()
+	return buf.Bytes()
 }
 
 // detectEOL returns the file's line ending: CRLF if any line uses it, else LF.
@@ -71,8 +71,8 @@ func sectionName(text string) (string, bool) {
 // index one past its last line.
 func findSection(lines []regLine, section string) (start, end int) {
 	start = -1
-	for i, l := range lines {
-		name, ok := sectionName(l.text)
+	for i, line := range lines {
+		name, ok := sectionName(line.text)
 		if !ok {
 			continue
 		}
@@ -108,7 +108,7 @@ func parseValueLine(text string) (name, rest string, ok bool) {
 func findValue(lines []regLine, start, end int, name string) int {
 	want := regEscape(name)
 	for i := start + 1; i < end; i++ {
-		if n, _, ok := parseValueLine(lines[i].text); ok && strings.EqualFold(n, want) {
+		if valueName, _, ok := parseValueLine(lines[i].text); ok && strings.EqualFold(valueName, want) {
 			return i
 		}
 	}
@@ -125,21 +125,21 @@ func insertIndex(lines []regLine, start, end int) int {
 	return i
 }
 
-func regEscape(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
+func regEscape(raw string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(raw)
 }
 
 func valueLine(rawName, rawValue string) string {
 	return `"` + rawName + `"=` + rawValue
 }
 
-func insertLine(lines []regLine, at int, l regLine, eol string) []regLine {
+func insertLine(lines []regLine, at int, line regLine, eol string) []regLine {
 	if at > 0 && lines[at-1].eol == "" {
 		lines[at-1].eol = eol // previous line was the unterminated last line
 	}
 	lines = append(lines, regLine{})
 	copy(lines[at+1:], lines[at:])
-	lines[at] = l
+	lines[at] = line
 	return lines
 }
 

@@ -21,7 +21,7 @@ func fixture(t *testing.T) []byte {
 	return b
 }
 
-func TestSetExistingSectionNewValueRoundTrip(t *testing.T) {
+func TestSetRegValue_existingSectionNewValue_insertsAndRoundTrips(t *testing.T) {
 	orig := fixture(t)
 	out, prev, err := SetRegValue(orig, section, "winhttp", "native,builtin", 42)
 	if err != nil {
@@ -48,7 +48,7 @@ func TestSetExistingSectionNewValueRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSetExistingValueRoundTrip(t *testing.T) {
+func TestSetRegValue_existingValueDifferentCase_replacesAndRoundTrips(t *testing.T) {
 	orig := fixture(t)
 	out, prev, err := SetRegValue(orig, section, "D3D11", "builtin", 42) // name matches case-insensitively
 	if err != nil {
@@ -72,7 +72,7 @@ func TestSetExistingValueRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSetMissingSection(t *testing.T) {
+func TestSetRegValue_missingSection_appendsSectionAndUndoes(t *testing.T) {
 	orig := []byte("WINE REGISTRY Version 2\n;; All keys relative to \\\\User\\\\S-1-5-21-0-0-0-1000\n\n#arch=win64\n")
 	out, prev, err := SetRegValue(orig, section, "winhttp", "native,builtin", 1727000000)
 	if err != nil || prev != nil {
@@ -92,7 +92,7 @@ func TestSetMissingSection(t *testing.T) {
 	}
 }
 
-func TestHeaderMatchCaseInsensitive(t *testing.T) {
+func TestSetRegValue_headerCaseDiffers_matchesCaseInsensitively(t *testing.T) {
 	orig := []byte("WINE REGISTRY Version 2\n\n[software\\\\wine\\\\dlloverrides] 1\n\"x\"=\"y\"\n")
 	out, _, err := SetRegValue(orig, section, "winhttp", "native", 2)
 	if err != nil {
@@ -103,7 +103,7 @@ func TestHeaderMatchCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestCRLFPreserved(t *testing.T) {
+func TestSetRegValue_crlfFile_preservesLineEndings(t *testing.T) {
 	orig := bytes.ReplaceAll(fixture(t), []byte("\n"), []byte("\r\n"))
 	out, _, err := SetRegValue(orig, section, "winhttp", "native,builtin", 42)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestCRLFPreserved(t *testing.T) {
 	}
 }
 
-func TestNoTrailingNewline(t *testing.T) {
+func TestSetRegValue_noTrailingNewline_appendsValueLine(t *testing.T) {
 	orig := []byte("WINE REGISTRY Version 2\n\n[Software\\\\Wine\\\\DllOverrides] 1")
 	out, _, err := SetRegValue(orig, section, "winhttp", "native", 2)
 	if err != nil {
@@ -132,7 +132,7 @@ func TestNoTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestValueNotInOtherSections(t *testing.T) {
+func TestSetRegValue_valueInOtherSection_insertsSeparateValue(t *testing.T) {
 	// "winhttp" exists only in another section: it must be inserted, not replaced.
 	orig := fixture(t)
 	out, prev, _ := SetRegValue(orig, section, "winhttp", "native,builtin", 1)
@@ -144,7 +144,7 @@ func TestValueNotInOtherSections(t *testing.T) {
 	}
 }
 
-func TestRestoreWhenValueDeletedMeanwhile(t *testing.T) {
+func TestRestoreRegValue_valueMissingWithPrevious_reinsertsIt(t *testing.T) {
 	orig := []byte("[Software\\\\Wine\\\\DllOverrides] 1\n#time=abc\n")
 	prev := `"builtin"`
 	out, err := RestoreRegValue(orig, section, "winhttp", &prev)
@@ -160,7 +160,7 @@ func TestRestoreWhenValueDeletedMeanwhile(t *testing.T) {
 	}
 }
 
-func TestParseValueLineEscapes(t *testing.T) {
+func TestParseValueLine_escapedName_parsesNameAndRest(t *testing.T) {
 	name, rest, ok := parseValueLine(`"a\"b\\c"="v"`)
 	if !ok || name != `a\"b\\c` || rest != `"v"` {
 		t.Errorf("got %q %q %v", name, rest, ok)

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
+	"github.com/Knurobroddy/crackers-tui/internal/hooks"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
 )
 
@@ -611,8 +612,8 @@ func TestMissingPrefixAborts(t *testing.T) {
 	g := newFakeGame(t, false) // no compatdata
 	before := snapshot(t, g.lib)
 	err := New(r.client(), "0.1.0", nil).Install(context.Background(), g.request("linux_proton", pack), nil)
-	if err == nil || !strings.Contains(err.Error(), "Launch the game once via Steam (Proton)") {
-		t.Fatalf("err = %v", err)
+	if !errors.Is(err, hooks.ErrPrefixNotFound) {
+		t.Fatalf("err = %v, want ErrPrefixNotFound", err)
 	}
 	assertSameTree(t, before, snapshot(t, g.lib))
 }

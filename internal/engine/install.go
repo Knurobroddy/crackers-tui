@@ -79,7 +79,7 @@ func (e *Engine) prepare(ctx context.Context, req InstallRequest, emit ProgressF
 			return nil, err
 		}
 	}
-	hctx := hooks.HookCtx{GameID: req.Game.GameID, BuildID: req.Game.BuildID, RootDir: root, Extra: req.Game.Extra, Log: log}
+	hctx := hooks.HookCtx{GameID: req.Game.GameID, BuildID: req.Game.BuildID, RootDir: root, Extra: req.Game.Extra}
 	var active []hooks.Hook
 	for _, spec := range m.Hooks {
 		h, err := hooks.New(spec.Type, spec.Raw)
@@ -197,7 +197,7 @@ func (e *Engine) Install(ctx context.Context, req InstallRequest, progress Progr
 	}
 	if err == nil && st != nil && len(st.old.Undo) > 0 {
 		oldUndone = true
-		err = runUndo(st.old.Undo, log)
+		err = runUndo(st.old.Undo)
 	}
 	if err == nil {
 		err = e.applyHooks(pr.active, pr.hctx, j, emit)
@@ -393,7 +393,7 @@ func (e *Engine) rollback(root string, j *journal) error {
 			errs = append(errs, fsErr(p, err))
 		}
 	}
-	if err := runUndo(j.undo, e.log); err != nil {
+	if err := runUndo(j.undo); err != nil {
 		errs = append(errs, err)
 	}
 	for i := len(j.dirs) - 1; i >= 0; i-- {
@@ -427,10 +427,10 @@ func removeIfEmpty(dir string) error {
 }
 
 // runUndo runs undo actions in reverse order and collects their errors.
-func runUndo(undo []hooks.UndoAction, log *slog.Logger) error {
+func runUndo(undo []hooks.UndoAction) error {
 	var errs []error
 	for i := len(undo) - 1; i >= 0; i-- {
-		if err := hooks.RunUndo(undo[i], log); err != nil {
+		if err := hooks.RunUndo(undo[i]); err != nil {
 			errs = append(errs, err)
 		}
 	}
