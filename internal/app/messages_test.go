@@ -14,24 +14,36 @@ import (
 
 func TestUserMessage_knownErrors_containAdvice(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
-		want string
+		name        string
+		err         error
+		want        string
+		wantDetails bool
 	}{
-		{"permission", fmt.Errorf("write x: %w", &engine.PermissionError{Path: `C:\g\x`}), "administrator"},
-		{"update required", &remote.UpdateRequiredError{Doc: "games.json", Reason: "schema_version 2"}, "Please update Crackers Modinst"},
-		{"no prefix", fmt.Errorf("validate hook: %w", hooks.ErrPrefixNotFound), "Launch the game once via Steam"},
-		{"hooks undone", errors.Join(errors.New("x"), engine.ErrPreviousHooksUndone), "reinstall it"},
-		{"remove incomplete", errors.Join(engine.ErrRemoveIncomplete, errors.New("x")), "retry"},
-		{"nothing to remove", engine.ErrNothingToRemove, "Nothing to remove"},
-		{"leftovers", &engine.LeftoversError{Root: "/g", Paths: []string{"BepInEx/"}}, "Leftover mod files"},
-		{"rollback incomplete", errors.Join(engine.ErrRollbackIncomplete, errors.New("x")), "could not be undone"},
+		{"permission", fmt.Errorf("write x: %w", &engine.PermissionError{Path: `C:\g\x`}), "administrator", true},
+		{"update required", &remote.UpdateRequiredError{Doc: "games.json", Reason: "schema_version 2"}, "Please update Crackers Modinst", true},
+		{"no prefix", fmt.Errorf("validate hook: %w", hooks.ErrPrefixNotFound), "Launch the game once via Steam", true},
+		{"hooks undone", errors.Join(errors.New("x"), engine.ErrPreviousHooksUndone), "reinstall it", true},
+		{"remove incomplete", errors.Join(engine.ErrRemoveIncomplete, errors.New("x")), "retry", true},
+		{"nothing to remove", engine.ErrNothingToRemove, "Nothing to remove", false},
+		{"leftovers", &engine.LeftoversError{Root: "/g", Paths: []string{"BepInEx/"}}, "Leftover mod files", true},
+		{"rollback incomplete", errors.Join(engine.ErrRollbackIncomplete, errors.New("x")), "could not be undone", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := app.UserMessage(tc.err); !strings.Contains(got, tc.want) {
+			got := app.UserMessage(tc.err)
+			if !strings.Contains(got, tc.want) {
 				t.Errorf("UserMessage = %q, want it to contain %q", got, tc.want)
 			}
+			if hasDetails := strings.Contains(got, "Details:"); hasDetails != tc.wantDetails {
+				t.Errorf("UserMessage = %q, want Details line: %v", got, tc.wantDetails)
+			}
 		})
+	}
+}
+
+func TestUserMessage_bareSentinel_omitsDetails(t *testing.T) {
+	want := "Nothing to remove: no pack is installed for this game."
+	if got := app.UserMessage(engine.ErrNothingToRemove); got != want {
+		t.Errorf("UserMessage(ErrNothingToRemove) = %q, want %q", got, want)
 	}
 }
 

@@ -27,8 +27,19 @@ var messageRules = []func(error) (string, bool){
 	rollbackIncompleteMessage,
 }
 
+// bareSentinels carries no detail beyond its advice text, so appending
+// "Details: <message>" would only repeat it verbatim.
+var bareSentinels = []error{
+	engine.ErrNothingToRemove,
+	hooks.ErrPrefixNotFound,
+	engine.ErrRemoveIncomplete,
+	engine.ErrPreviousHooksUndone,
+	engine.ErrRollbackIncomplete,
+}
+
 // UserMessage turns an error from any layer into text for the player: the
-// advice for every known cause, followed by the technical detail.
+// advice for every known cause, followed by the technical detail, unless err
+// is exactly a bare sentinel whose detail would only repeat that advice.
 func UserMessage(err error) string {
 	if err == nil {
 		return ""
@@ -39,11 +50,23 @@ func UserMessage(err error) string {
 			advice = append(advice, text)
 		}
 	}
-	detail := capitalize(err.Error())
 	if len(advice) == 0 {
-		return detail
+		return capitalize(err.Error())
 	}
-	return strings.Join(advice, "\n\n") + "\n\nDetails: " + detail
+	if isBareSentinel(err) {
+		return strings.Join(advice, "\n\n")
+	}
+	return strings.Join(advice, "\n\n") + "\n\nDetails: " + capitalize(err.Error())
+}
+
+func isBareSentinel(err error) bool {
+	for _, sentinel := range bareSentinels {
+		//nolint:errorlint // identity on purpose: a wrapped or joined sentinel carries extra context and keeps its Details line
+		if err == sentinel {
+			return true
+		}
+	}
+	return false
 }
 
 func nothingToRemoveMessage(err error) (string, bool) {
