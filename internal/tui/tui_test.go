@@ -2,16 +2,19 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Knurobroddy/crackers-tui/internal/app"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
+	"github.com/Knurobroddy/crackers-tui/internal/servers"
 	"github.com/Knurobroddy/crackers-tui/internal/update"
 )
 
@@ -19,6 +22,12 @@ var (
 	testGames   = &remote.Games{Games: []detect.GameDef{{ID: "valheim", Name: "Valheim", NotFoundHint: "Use Proton."}}}
 	testIndex   = &remote.Index{Packs: []remote.PackRef{{ID: "p", GameID: "valheim", Name: "P"}}}
 	testLibrary = &app.Library{Games: testGames, Index: testIndex}
+
+	serverTestDef     = detect.GameDef{ID: "valheim-server", Name: "Valheim Dedicated Server", Kind: detect.KindServer}
+	serverTestLibrary = &app.Library{
+		Games: &remote.Games{Games: []detect.GameDef{testGames.Games[0], serverTestDef}},
+		Index: &remote.Index{Packs: []remote.PackRef{testIndex.Packs[0], {ID: "s", GameID: "valheim-server", Name: "S"}}},
+	}
 )
 
 // startup feeds the startup messages in order and returns the model.
@@ -107,11 +116,11 @@ func TestModel_Update_quitWhileBusy_showsPleaseWaitThenResult(t *testing.T) {
 func TestModel_View_gameDetected_listsGameWithStatus(t *testing.T) {
 	m := startup(t, false)
 	m.library, m.remoteDone = testLibrary, true
-	m.Update(gamesDetectedMsg{games: []app.Game{{
+	m.Update(gamesDetectedMsg{detection: app.Detection{Games: []app.Game{{
 		Install: detect.Result{GameID: "valheim", RootDir: "/g"},
 		Def:     testGames.Games[0],
 		Status:  engine.Status{State: engine.UpdateAvailable, Marker: &engine.Marker{PackName: "P", PackVersion: "1"}},
-	}}})
+	}}}})
 	if v := m.View(); m.screen != screenMain || !strings.Contains(v, "Valheim — Update available: P 1") {
 		t.Fatalf("view:\n%s", v)
 	}
@@ -173,7 +182,7 @@ func TestModel_Update_installHitsLeftovers_offersCleanupOnceThenShowsResult(t *t
 	m := startup(t, false)
 	m.library, m.remoteDone = testLibrary, true
 	game := app.Game{Install: detect.Result{GameID: "valheim", RootDir: "/g"}, Def: testGames.Games[0], Status: engine.Status{State: engine.NotInstalled}}
-	m.Update(gamesDetectedMsg{games: []app.Game{game}})
+	m.Update(gamesDetectedMsg{detection: app.Detection{Games: []app.Game{game}}})
 	m.op = app.Operation{Kind: app.OpInstall, Game: game, Pack: testIndex.Packs[0]}
 	m.screen, m.busy = screenProgress, true
 
@@ -223,11 +232,11 @@ func TestModel_View_gameMarkerNeedsNewerApp_showsUpdateAdvice(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 45})
 	m.library, m.remoteDone = testLibrary, true
 	markerErr := &remote.UpdateRequiredError{Doc: "install marker", Reason: "schema 9 is newer than supported"}
-	m.Update(gamesDetectedMsg{games: []app.Game{{
+	m.Update(gamesDetectedMsg{detection: app.Detection{Games: []app.Game{{
 		Install: detect.Result{GameID: "valheim", RootDir: "/g"},
 		Def:     testGames.Games[0],
 		Status:  engine.Status{State: engine.Unknown, Err: markerErr},
-	}}})
+	}}}})
 	m.selected = 0
 	m.openGame()
 	if v := m.View(); !strings.Contains(v, "Please update Crackers Modinst") {
@@ -242,6 +251,108 @@ func TestModel_Update_updateFailsWithPermissionError_showsAdministratorAdvice(t 
 	m.Update(updateAppliedMsg{err: &engine.PermissionError{Path: "/app", Err: errors.New("access denied")}})
 	if v := m.View(); m.screen != screenResult || !strings.Contains(v, "Permission denied writing to /app. On Windows, try running") {
 		t.Errorf("screen = %v, view:\n%s", m.screen, v)
+	}
+}
+
+func TestModel_View_serversInLibrary_showsSectionsWithCursorOnFirstRow(t *testing.T) {
+	m := startup(t, false)
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 45})
+	m.library, m.remoteDone = serverTestLibrary, true
+	m.Update(gamesDetectedMsg{detection: app.Detection{
+		Games: []app.Game{
+			{Install: detect.Result{GameID: "valheim", RootDir: "/g"}, Def: testGames.Games[0]},
+			{Install: detect.Result{GameID: "valheim-server", RootDir: "/srv/v"}, Def: serverTestDef},
+		},
+		MissingServers: []string{"/srv/old"},
+	}})
+
+	v := m.View()
+	want := []string{
+		"Choose a game or server", "── Games ──", "Valheim — Not installed", "── Servers ──",
+		"Valheim Dedicated Server — Not installed  (/srv/v)", "Saved server — Not found  (/srv/old)", "+ Add server",
+	}
+	for _, text := range want {
+		if !strings.Contains(v, text) {
+			t.Errorf("view lacks %q:\n%s", text, v)
+		}
+	}
+	if !strings.Contains(v, "> "+rowIndent+"Valheim — Not installed") {
+		t.Errorf("cursor not on the first game row:\n%s", v)
+	}
+}
+
+func TestModel_Update_chooseMissingServer_asksToForget(t *testing.T) {
+	m := startup(t, false)
+	m.library, m.remoteDone = serverTestLibrary, true
+	m.Update(gamesDetectedMsg{detection: app.Detection{MissingServers: []string{"/srv/old"}}})
+
+	m.chooseMissingServer("0")
+
+	if m.screen != screenForget || m.forgetDir != "/srv/old" || !strings.Contains(m.View(), "Forget this server?") {
+		t.Fatalf("screen = %v, dir = %q\n%s", m.screen, m.forgetDir, m.View())
+	}
+	m.back()
+	if m.screen != screenMain {
+		t.Errorf("esc from forget: screen = %v, want main", m.screen)
+	}
+}
+
+func TestModel_Update_typingQOnAddServer_doesNotQuit(t *testing.T) {
+	m := startup(t, false)
+	m.library, m.remoteDone = serverTestLibrary, true
+	m.Update(gamesDetectedMsg{})
+	m.openAddServer()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+
+	if cmd != nil {
+		if _, isQuit := cmd().(tea.QuitMsg); isQuit {
+			t.Fatal("typing q on the add server screen quit")
+		}
+	}
+	if m.screen != screenAddServer {
+		t.Errorf("screen = %v, want add server", m.screen)
+	}
+}
+
+func TestModel_View_savedServersUnreadable_showsWarning(t *testing.T) {
+	m := startup(t, false)
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 45})
+	m.library, m.remoteDone = testLibrary, true
+	m.Update(gamesDetectedMsg{detection: app.Detection{ServersErr: &servers.FileError{Path: "/c/servers.modinst", Err: errors.New("parse")}}})
+
+	if v := m.View(); !strings.Contains(v, "Saved servers could not be read") || !strings.Contains(v, "── Servers ──") {
+		t.Errorf("view:\n%s", v)
+	}
+}
+
+func TestModel_gameOptions_serverOnly_offersForget(t *testing.T) {
+	m := startup(t, false)
+	m.library = serverTestLibrary
+	for _, tc := range []struct {
+		def  detect.GameDef
+		want bool
+	}{
+		{serverTestDef, true},
+		{testGames.Games[0], false},
+	} {
+		options := m.gameOptions(app.Game{Def: tc.def, Status: engine.Status{State: engine.NotInstalled}})
+		hasForget := slices.ContainsFunc(options, func(o huh.Option[string]) bool { return o.Value == "forget" })
+		if hasForget != tc.want {
+			t.Errorf("%s: forget offered = %v, want %v", tc.def.ID, hasForget, tc.want)
+		}
+	}
+}
+
+func TestConfirmTexts_server_asksToStopIt(t *testing.T) {
+	server := app.Game{Install: detect.Result{RootDir: "/srv/v"}, Def: serverTestDef, Status: engine.Status{State: engine.NotInstalled}}
+	for _, kind := range []app.OpKind{app.OpInstall, app.OpReinstall, app.OpRemove, app.OpCleanLeftovers} {
+		if _, description := confirmTexts(kind, server, remote.PackRef{Name: "S"}); !strings.Contains(description, "Stop the server first.") {
+			t.Errorf("%v: description = %q", kind, description)
+		}
+	}
+	if _, description := confirmTexts(app.OpInstall, app.Game{Def: testGames.Games[0]}, remote.PackRef{}); strings.Contains(description, "Stop the server") {
+		t.Errorf("game install asks to stop a server: %q", description)
 	}
 }
 

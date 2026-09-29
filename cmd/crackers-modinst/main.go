@@ -1,5 +1,6 @@
 // Command crackers-modinst is the Crackers Modinst TUI: it detects supported
-// games and installs or removes one modpack per game from a remote library.
+// games and saved dedicated servers, and installs or removes one modpack per
+// game or server from a remote library.
 package main
 
 import (
@@ -19,8 +20,10 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/detect/steam"
+	"github.com/Knurobroddy/crackers-tui/internal/detect/userfolder"
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
+	"github.com/Knurobroddy/crackers-tui/internal/servers"
 	"github.com/Knurobroddy/crackers-tui/internal/tui"
 	"github.com/Knurobroddy/crackers-tui/internal/update"
 )
@@ -125,16 +128,31 @@ func buildApp(flags cliFlags) (*app.App, error) {
 	if err != nil {
 		return nil, err
 	}
-	detector := detect.NewRegistry(steam.New(nil, runtime.GOOS))
+	serverStore := servers.New(serversPath())
+	serverFolders := userfolder.New(serverStore, runtime.GOOS)
+	detector := detect.NewRegistry(steam.New(nil, runtime.GOOS), serverFolders)
 	packEngine := engine.New(client, version, engine.OSFiles{})
 	deps := app.Deps{
-		Catalog:   client,
-		Detector:  detector,
-		Installer: packEngine,
-		Status:    packEngine,
-		Updater:   newUpdater(flags),
+		Catalog:       client,
+		Detector:      detector,
+		Installer:     packEngine,
+		Status:        packEngine,
+		Updater:       newUpdater(flags),
+		Servers:       serverStore,
+		ServerMatcher: serverFolders,
 	}
 	return app.New(deps), nil
+}
+
+// serversPath returns the saved servers file, or "" when the OS has no user
+// config folder; games still work then, only servers cannot be saved.
+func serversPath() string {
+	path, err := config.ServersPath()
+	if err != nil {
+		slog.Warn("no user config folder for saved servers", "err", err)
+		return ""
+	}
+	return path
 }
 
 // newUpdater returns an Updater for the running version, or nil when
@@ -153,8 +171,8 @@ func newUpdater(flags cliFlags) app.Updater {
 	return updater
 }
 
-// printDetection prints the detection results for games that have packs, in
-// the same JSON shape --detect-only has always produced.
+// printDetection prints the detection results for games and saved servers
+// that have packs, in the same JSON shape --detect-only has always produced.
 func printDetection(application *app.App) int {
 	ctx, cancel := context.WithTimeout(context.Background(), detectTimeout)
 	defer cancel()
@@ -162,7 +180,7 @@ func printDetection(application *app.App) int {
 	if err != nil {
 		return fatal(err, false)
 	}
-	games := application.DetectGames(ctx, library)
+	games := application.Detect(ctx, library).Games
 	results := make([]detect.Result, 0, len(games))
 	for _, game := range games {
 		results = append(results, game.Install)

@@ -18,8 +18,10 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/app"
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
 	"github.com/Knurobroddy/crackers-tui/internal/detect/steam"
+	"github.com/Knurobroddy/crackers-tui/internal/detect/userfolder"
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
+	"github.com/Knurobroddy/crackers-tui/internal/servers"
 	"github.com/Knurobroddy/crackers-tui/internal/testsupport/fakeworld"
 )
 
@@ -61,11 +63,15 @@ func newFlowModel(t *testing.T, w *fakeworld.World) *model {
 		t.Fatal(err)
 	}
 	eng := engine.New(client, "0.1.0", engine.OSFiles{})
+	serverStore := servers.New(w.ServersFile)
+	serverFolders := userfolder.New(serverStore, "windows")
 	application := app.New(app.Deps{
-		Catalog:   client,
-		Detector:  detect.NewRegistry(steam.New([]string{w.SteamRoot}, "windows")),
-		Installer: eng,
-		Status:    eng,
+		Catalog:       client,
+		Detector:      detect.NewRegistry(steam.New([]string{w.SteamRoot}, "windows"), serverFolders),
+		Installer:     eng,
+		Status:        eng,
+		Servers:       serverStore,
+		ServerMatcher: serverFolders,
 	})
 	return newModel(Deps{AppVersion: "0.1.0", App: application, LogPath: "crackers-modinst.log"})
 }
@@ -164,6 +170,44 @@ func TestFlow_RemoveInstalledPack_showsVanillaResult(t *testing.T) {
 	golden.RequireEqual(t, normalizePaths(finalView(t, tm), w))
 }
 
+func TestFlow_AddServerThenInstall_writesPackIntoServerFolder(t *testing.T) {
+	w := fakeworld.New(t, fakeworld.Options{WithServer: true})
+	tm := teatest.NewTestModel(t, newFlowModel(t, w), teatest.WithInitialTermSize(flowWidth, flowHeight))
+
+	waitFor(t, tm, "+ Add server")
+	// Rows: ── Games ──, Valheim (cursor), ── Servers ──, + Add server.
+	tm.Send(tea.KeyMsg{Type: tea.KeyDown})
+	tm.Send(tea.KeyMsg{Type: tea.KeyDown})
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitFor(t, tm, "Add a server")
+	// One message, as a paste: tm.Type splits "ł" into bytes.
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(w.ServerRoot)})
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitFor(t, tm, "Saved the server folder")
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter}) // continue: detect again
+	waitFor(t, tm, "Valheim Dedicated Server — Not installed")
+	// Rows: ── Games ──, Valheim (cursor), ── Servers ──, the server.
+	tm.Send(tea.KeyMsg{Type: tea.KeyDown})
+	tm.Send(tea.KeyMsg{Type: tea.KeyDown})
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitFor(t, tm, "Install pack")
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitFor(t, tm, "Test server pack")
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitFor(t, tm, "Stop the server first.")
+	tm.Send(tea.KeyMsg{Type: tea.KeyLeft})
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitFor(t, tm, "Installed Test server pack into")
+
+	finalView(t, tm)
+	if _, err := os.Stat(filepath.Join(w.ServerRoot, ".crackers-modinst.json")); err != nil {
+		t.Fatalf("marker missing in the server folder: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(w.GameRoot, ".crackers-modinst.json")); !os.IsNotExist(err) {
+		t.Fatalf("game folder changed (marker err = %v)", err)
+	}
+}
+
 // installFirst installs the test pack directly, without the UI.
 func installFirst(t *testing.T, w *fakeworld.World) {
 	t.Helper()
@@ -173,7 +217,7 @@ func installFirst(t *testing.T, w *fakeworld.World) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	games := application.DetectGames(t.Context(), library)
+	games := application.Detect(t.Context(), library).Games
 	pack, _ := library.Index.Pack("valheim-test")
 	if _, err := application.Run(t.Context(), app.Operation{Kind: app.OpInstall, Game: games[0], Pack: pack}, nil); err != nil {
 		t.Fatal(err)

@@ -11,6 +11,7 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
 	"github.com/Knurobroddy/crackers-tui/internal/hooks"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
+	"github.com/Knurobroddy/crackers-tui/internal/servers"
 )
 
 const maxLeftoversInMessage = 8
@@ -26,6 +27,9 @@ var messageRules = []func(error) (string, bool){
 	removeIncompleteMessage,
 	previousHooksUndoneMessage,
 	rollbackIncompleteMessage,
+	notServerFolderMessage,
+	serversFileMessage,
+	serverSentinelMessage,
 }
 
 // bareSentinels carries no detail beyond its advice text, so appending
@@ -36,6 +40,18 @@ var bareSentinels = []error{
 	engine.ErrRemoveIncomplete,
 	engine.ErrPreviousHooksUndone,
 	engine.ErrRollbackIncomplete,
+	ErrNoFolder,
+	servers.ErrAlreadySaved,
+	servers.ErrNotSaved,
+	servers.ErrNoConfigDir,
+}
+
+// serverSentinelTexts is the advice for the server-list sentinels.
+var serverSentinelTexts = map[error]string{
+	ErrNoFolder:             "Enter the folder the server is installed in.",
+	servers.ErrAlreadySaved: "This server folder is already saved.",
+	servers.ErrNotSaved:     "This server folder is not saved.",
+	servers.ErrNoConfigDir:  "There is no user settings folder to keep saved servers in.",
 }
 
 // UserMessage turns an error from any layer into text for the player: the
@@ -54,7 +70,7 @@ func UserMessage(err error) string {
 	if len(advice) == 0 {
 		return capitalize(err.Error())
 	}
-	if isBareSentinel(err) {
+	if isBareSentinel(err) || isNotServerFolder(err) {
 		return strings.Join(advice, "\n\n")
 	}
 	return strings.Join(advice, "\n\n") + "\n\nDetails: " + capitalize(err.Error())
@@ -86,6 +102,14 @@ func isBareSentinel(err error) bool {
 	return false
 }
 
+// isNotServerFolder reports whether err is exactly a NotServerFolderError,
+// whose advice already names the folder.
+func isNotServerFolder(err error) bool {
+	//nolint:errorlint // identity on purpose, as in isBareSentinel
+	_, ok := err.(*NotServerFolderError)
+	return ok
+}
+
 func nothingToRemoveMessage(err error) (string, bool) {
 	return "Nothing to remove: no pack is installed for this game.", errors.Is(err, engine.ErrNothingToRemove)
 }
@@ -107,7 +131,8 @@ func permissionMessage(err error) (string, bool) {
 	if !errors.As(err, &permErr) {
 		return "", false
 	}
-	return fmt.Sprintf("Permission denied writing to %s. On Windows, try running %s as administrator.", permErr.Path, config.AppName), true
+	return fmt.Sprintf("Permission denied writing to %s. On Windows, try running %s as administrator; "+
+		"on Linux, run it as the user that owns the folder.", permErr.Path, config.AppName), true
 }
 
 func prefixNotFoundMessage(err error) (string, bool) {
@@ -136,6 +161,33 @@ func previousHooksUndoneMessage(err error) (string, bool) {
 func rollbackIncompleteMessage(err error) (string, bool) {
 	return "Some changes could not be undone after the failure. Check the game folder, or reinstall the pack.",
 		errors.Is(err, engine.ErrRollbackIncomplete)
+}
+
+func notServerFolderMessage(err error) (string, bool) {
+	var notServerErr *NotServerFolderError
+	if !errors.As(err, &notServerErr) {
+		return "", false
+	}
+	return fmt.Sprintf("This folder does not contain a supported server: %s\nSupported servers: %s.",
+		notServerErr.Dir, strings.Join(notServerErr.Supported, ", ")), true
+}
+
+func serversFileMessage(err error) (string, bool) {
+	var fileErr *servers.FileError
+	if !errors.As(err, &fileErr) {
+		return "", false
+	}
+	return fmt.Sprintf("The list of saved servers (%s) could not be read, so it was left unchanged. Fix or delete that file, then retry.",
+		fileErr.Path), true
+}
+
+func serverSentinelMessage(err error) (string, bool) {
+	for sentinel, text := range serverSentinelTexts {
+		if errors.Is(err, sentinel) {
+			return text, true
+		}
+	}
+	return "", false
 }
 
 func capitalize(s string) string {

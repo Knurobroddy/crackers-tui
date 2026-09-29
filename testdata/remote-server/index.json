@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "min_app_version": "0.1.0",
+  "packs": [
+    {
+      "id": "valheim-test",
+      "game_id": "valheim",
+      "name": "Test pack",
+      "description": "BepInEx plus one fake mod (smoke test only)",
+      "manifest": "packs/valheim-test.json"
+    },
+    {
+      "id": "valheim-server-test",
+      "game_id": "valheim-server",
+      "name": "Test server pack",
+      "description": "BepInEx plus one fake mod for the dedicated server (smoke test only)",
+      "manifest": "packs/valheim-server-test.json"
+    }
+  ]
+}

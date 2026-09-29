@@ -33,6 +33,10 @@ const (
 	// BackupSuffix is appended to backups of files edited by hooks.
 	BackupSuffix = ".modinst-bak"
 
+	// ServersFileName is the list of saved server folders, kept in
+	// os.UserConfigDir()/AppSlug.
+	ServersFileName = "servers.modinst"
+
 	// ChecksumsAsset is the GoReleaser checksum file validated by self-update.
 	ChecksumsAsset = "checksums.txt"
 )
@@ -43,6 +47,7 @@ const (
 	IndexSchemaVersion    = 1
 	ManifestSchemaVersion = 1
 	MarkerSchemaVersion   = 1
+	ServersSchemaVersion  = 1
 )
 
 // FirstAppVersion is the first release; the pack tool writes it as
@@ -60,4 +65,13 @@ func UserAgent(version string) string {
 // LogPath returns the absolute path of the log file.
 func LogPath() string {
 	return filepath.Join(os.TempDir(), LogFileName)
+}
+
+// ServersPath returns the absolute path of the saved servers file.
+func ServersPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, AppSlug, ServersFileName), nil
 }

@@ -19,6 +19,10 @@ const (
 	ExtraSteamLibraries = "steam_libraries" // all known libraries, joined with os.PathListSeparator
 )
 
+// KindServer marks a games.json entry as a dedicated server. Entries without
+// a kind are games.
+const KindServer = "server"
+
 // BuildDef is one build variant of a game (games.json "builds").
 type BuildDef struct {
 	ID     string `json:"id"`
@@ -36,6 +40,7 @@ type SteamDef struct {
 type GameDef struct {
 	ID           string     `json:"id"`
 	Name         string     `json:"name"`
+	Kind         string     `json:"kind,omitempty"`
 	Strategy     string     `json:"strategy"`
 	Steam        *SteamDef  `json:"steam,omitempty"`
 	NotFoundHint string     `json:"not_found_hint,omitempty"`
@@ -69,6 +74,11 @@ func NewRegistry(strategies ...Strategy) *Registry {
 		r.strategies[s.Name()] = s
 	}
 	return r
+}
+
+// IsServer reports whether the entry is a dedicated server.
+func (g GameDef) IsServer() bool {
+	return g.Kind == KindServer
 }
 
 // FilesFor returns the manifest file list used by the given build, or "" if

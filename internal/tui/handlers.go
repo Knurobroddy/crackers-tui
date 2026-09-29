@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,8 +26,13 @@ func (m *model) onWindowSize(msg tea.WindowSizeMsg) tea.Cmd {
 
 func (m *model) onKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
 		return m.quit()
+	case "q":
+		// A typed folder may contain a q.
+		if m.screen != screenAddServer {
+			return m.quit()
+		}
 	case "esc":
 		if cmd, ok := m.back(); ok {
 			return cmd
@@ -82,7 +88,9 @@ func (m *model) onUpdateChecked(msg updateCheckedMsg) tea.Cmd {
 
 func (m *model) onGamesDetected(msg gamesDetectedMsg) tea.Cmd {
 	m.detectDone = true
-	m.games = msg.games
+	m.games = msg.detection.Games
+	m.missingServers = msg.detection.MissingServers
+	m.serversErr = msg.detection.ServersErr
 	return m.proceed()
 }
 
@@ -159,6 +167,10 @@ func (m *model) formDone() tea.Cmd {
 		return m.formDonePacks()
 	case screenConfirm:
 		return m.formDoneConfirm()
+	case screenAddServer:
+		return m.formDoneAddServer()
+	case screenForget:
+		return m.formDoneForget()
 	}
 	return nil
 }
@@ -185,19 +197,55 @@ func (m *model) formDoneUpdatePrompt() tea.Cmd {
 }
 
 func (m *model) formDoneMain() tea.Cmd {
-	switch choice := m.form.GetString("choice"); choice {
-	case "detect":
+	choice := m.form.GetString("choice")
+	switch choice {
+	case choiceDetect:
 		return m.reload() // fresh library + detection
-	case "quit":
+	case choiceQuit:
 		return tea.Quit
-	default:
-		i, err := strconv.Atoi(choice)
-		if err != nil || i < 0 || i >= len(m.games) {
-			return m.openMain()
-		}
-		m.selected = i
-		return m.openGame()
+	case choiceAddServer:
+		return m.openAddServer()
 	}
+	if rest, ok := strings.CutPrefix(choice, missingPrefix); ok {
+		return m.chooseMissingServer(rest)
+	}
+	i, err := strconv.Atoi(choice)
+	if err != nil || i < 0 || i >= len(m.games) {
+		return m.openMain() // a section header
+	}
+	m.selected = i
+	return m.openGame()
+}
+
+// chooseMissingServer offers to forget a saved folder that holds no server;
+// nothing else can be done with it.
+func (m *model) chooseMissingServer(index string) tea.Cmd {
+	i, err := strconv.Atoi(index)
+	if err != nil || i < 0 || i >= len(m.missingServers) {
+		return m.openMain()
+	}
+	return m.openForget(m.missingServers[i], screenMain)
+}
+
+func (m *model) formDoneAddServer() tea.Cmd {
+	dir, err := m.deps.App.AddServer(m.library, m.form.GetString("folder"))
+	if err != nil {
+		slog.Warn("add server", "err", err)
+		return m.showResult(false, "The server was not added:\n\n"+app.UserMessage(err))
+	}
+	return m.showResult(true, "Saved the server folder "+dir+".")
+}
+
+func (m *model) formDoneForget() tea.Cmd {
+	if !m.form.GetBool("confirm") {
+		cmd, _ := m.back()
+		return cmd
+	}
+	if err := m.deps.App.ForgetServer(m.forgetDir); err != nil {
+		slog.Warn("forget server", "err", err)
+		return m.showResult(false, "The server was not forgotten:\n\n"+app.UserMessage(err))
+	}
+	return m.showResult(true, "Forgot the server folder "+m.forgetDir+". Nothing in it was changed.")
 }
 
 func (m *model) formDoneGame() tea.Cmd {
@@ -216,6 +264,8 @@ func (m *model) formDoneGame() tea.Cmd {
 		return m.openConfirm(app.OpRemove, game.Status.Pack, screenGame)
 	case "reinstall":
 		return m.openConfirm(app.OpReinstall, game.Status.Pack, screenGame)
+	case "forget":
+		return m.openForget(game.Install.RootDir, screenGame)
 	}
 	return m.openMain()
 }

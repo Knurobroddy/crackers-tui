@@ -10,6 +10,7 @@ import (
 	"github.com/Knurobroddy/crackers-tui/internal/engine"
 	"github.com/Knurobroddy/crackers-tui/internal/hooks"
 	"github.com/Knurobroddy/crackers-tui/internal/remote"
+	"github.com/Knurobroddy/crackers-tui/internal/servers"
 )
 
 func TestUserMessage_knownErrors_containAdvice(t *testing.T) {
@@ -28,6 +29,11 @@ func TestUserMessage_knownErrors_containAdvice(t *testing.T) {
 		{"leftovers", &engine.LeftoversError{Root: "/g", Paths: []string{"BepInEx/"}}, "Leftover mod files", true},
 		{"rollback incomplete", errors.Join(engine.ErrRollbackIncomplete, errors.New("x")), "could not be undone", true},
 		{"invalid pack", fmt.Errorf("%w: x is written twice", engine.ErrInvalidPack), "This modpack is broken. Please tell the pack's author.", true},
+		{"permission on linux", &engine.PermissionError{Path: "/srv/v"}, "run it as the user that owns the folder", true},
+		{"not a server", &app.NotServerFolderError{Dir: "/x", Supported: []string{"A", "B"}}, "does not contain a supported server: /x\nSupported servers: A, B.", false},
+		{"servers file", &servers.FileError{Path: "/c/servers.modinst", Err: errors.New("parse")}, "(/c/servers.modinst) could not be read", true},
+		{"already saved", servers.ErrAlreadySaved, "already saved", false},
+		{"no folder", app.ErrNoFolder, "Enter the folder", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := app.UserMessage(tc.err)

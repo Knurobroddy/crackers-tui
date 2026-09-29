@@ -25,16 +25,21 @@ const (
 // Options selects optional parts of the world.
 type Options struct {
 	WithPrefix bool // create steamapps/compatdata/<appid>/pfx/user.reg (Proton)
+	// WithServer creates a Valheim dedicated server folder outside Steam and
+	// adds the server and its test pack (testdata/remote-server) to the library.
+	WithServer bool
 }
 
 // World is one fake Steam install plus a served library copy.
 type World struct {
-	SteamRoot  string // Steam root with steamapps/libraryfolders.vdf
-	Library    string // the Steam library holding the game (same as SteamRoot)
-	GameRoot   string // steamapps/common/Valheim
-	UserReg    string // Wine prefix user.reg; "" without WithPrefix
-	LibraryDir string // local copy of testdata/remote, served at LibraryURL
-	LibraryURL string // base URL ending in "/"
+	SteamRoot   string // Steam root with steamapps/libraryfolders.vdf
+	Library     string // the Steam library holding the game (same as SteamRoot)
+	GameRoot    string // steamapps/common/Valheim
+	UserReg     string // Wine prefix user.reg; "" without WithPrefix
+	ServerRoot  string // dedicated server folder; "" without WithServer
+	ServersFile string // where the saved servers file may be written (not created)
+	LibraryDir  string // local copy of testdata/remote, served at LibraryURL
+	LibraryURL  string // base URL ending in "/"
 }
 
 // New builds the world below t.TempDir(). The Steam root path contains a space
@@ -43,10 +48,11 @@ func New(t *testing.T, opts Options) *World {
 	t.Helper()
 	steamRoot := filepath.Join(resolvedTempDir(t), "Gry Steam ł")
 	w := &World{
-		SteamRoot:  steamRoot,
-		Library:    steamRoot,
-		GameRoot:   filepath.Join(steamRoot, "steamapps", "common", "Valheim"),
-		LibraryDir: filepath.Join(t.TempDir(), "library"),
+		SteamRoot:   steamRoot,
+		Library:     steamRoot,
+		GameRoot:    filepath.Join(steamRoot, "steamapps", "common", "Valheim"),
+		LibraryDir:  filepath.Join(t.TempDir(), "library"),
+		ServersFile: filepath.Join(t.TempDir(), "servers.modinst"),
 	}
 	w.writeSteamFiles(t)
 	w.writeGameFiles(t)
@@ -54,6 +60,9 @@ func New(t *testing.T, opts Options) *World {
 		w.writePrefix(t)
 	}
 	copyDir(t, RepoPath("testdata", "remote"), w.LibraryDir)
+	if opts.WithServer {
+		w.writeServer(t)
+	}
 	server := httptest.NewServer(http.FileServer(http.Dir(w.LibraryDir)))
 	t.Cleanup(server.Close)
 	w.LibraryURL = server.URL + "/"
@@ -127,6 +136,17 @@ func (w *World) writePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, w.UserReg, data)
+}
+
+// writeServer creates a server folder holding both the Windows and the Linux
+// server program, so either build is detected, and overlays the library.
+func (w *World) writeServer(t *testing.T) {
+	t.Helper()
+	w.ServerRoot = filepath.Join(resolvedTempDir(t), "Valheim Server ł")
+	for _, rel := range []string{"valheim_server.exe", "valheim_server.x86_64", "start_headless_server.bat"} {
+		writeFile(t, filepath.Join(w.ServerRoot, rel), []byte("vanilla "+rel))
+	}
+	copyDir(t, RepoPath("testdata", "remote-server"), w.LibraryDir)
 }
 
 func addTreeEntry(tree map[string]string, dir, p string, d fs.DirEntry, walkErr error) error {

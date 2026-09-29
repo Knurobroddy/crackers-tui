@@ -81,7 +81,7 @@ func (c applyUpdate) run() tea.Msg {
 }
 
 func (c detectGames) run() tea.Msg {
-	return gamesDetectedMsg{games: c.app.DetectGames(context.Background(), c.library)}
+	return gamesDetectedMsg{detection: c.app.Detect(context.Background(), c.library)}
 }
 
 func (l listener) next() tea.Msg {

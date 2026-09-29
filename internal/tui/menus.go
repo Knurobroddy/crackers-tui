@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -50,13 +51,18 @@ func (m *model) openUpdatePrompt(forced bool) tea.Cmd {
 	return m.setForm(confirmForm(fmt.Sprintf("Update %s to v%s?", config.AppName, m.updateRelease.Version), description))
 }
 
-// gameLabel adds the folder when the same game is installed more than once.
+// gameLabel adds the folder when the same game is installed more than once,
+// and always for a server, since admins often run several.
 func (m *model) gameLabel(i int) string {
 	game := m.games[i]
 	label := fmt.Sprintf("%s — %s", game.Def.Name, game.Status)
+	withFolder := label + "  (" + game.Install.RootDir + ")"
+	if game.Def.IsServer() {
+		return withFolder
+	}
 	for j, other := range m.games {
 		if j != i && other.Def.ID == game.Def.ID {
-			return label + "  (" + game.Install.RootDir + ")"
+			return withFolder
 		}
 	}
 	return label
@@ -64,16 +70,106 @@ func (m *model) gameLabel(i int) string {
 
 func (m *model) openMain() tea.Cmd {
 	m.screen = screenMain
-	var options []huh.Option[string]
-	for i := range m.games {
-		options = append(options, huh.NewOption(m.gameLabel(i), strconv.Itoa(i)))
-	}
-	options = append(options, huh.NewOption("Detect again", "detect"), huh.NewOption("Quit", "quit"))
 	title := "Choose a game"
-	if len(m.games) == 0 {
+	switch {
+	case m.showsServers():
+		title = "Choose a game or server"
+	case len(m.games) == 0:
 		title = "What now?"
 	}
-	return m.setForm(selectForm(title, "", options...))
+	options := m.mainOptions()
+	cmd := m.setForm(selectForm(title, "", options...))
+	if len(options) > 0 && options[0].Value == choiceHeader {
+		// Step off the header by key: huh scrolls a preselected option to the
+		// top, which would hide the header above it.
+		m.form.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	return cmd
+}
+
+// showsServers reports whether the main menu has a Servers section: the
+// library offers a server pack, or servers were saved.
+func (m *model) showsServers() bool {
+	if len(m.missingServers) > 0 || m.serversErr != nil {
+		return true
+	}
+	if m.library != nil && len(m.library.ServerDefs()) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(m.games, isServer)
+}
+
+// mainOptions lists games, then servers, then the fixed actions. Without
+// servers the menu stays a plain game list.
+func (m *model) mainOptions() []huh.Option[string] {
+	actions := []huh.Option[string]{huh.NewOption("Detect again", choiceDetect), huh.NewOption("Quit", choiceQuit)}
+	if !m.showsServers() {
+		return append(m.gameRows(""), actions...)
+	}
+	var options []huh.Option[string]
+	if games := m.gameRows(rowIndent); len(games) > 0 {
+		options = append(options, sectionHeader("Games"))
+		options = append(options, games...)
+	}
+	options = append(options, sectionHeader("Servers"))
+	options = append(options, m.serverRows()...)
+	if m.library != nil && len(m.library.ServerDefs()) > 0 {
+		options = append(options, huh.NewOption(rowIndent+"+ Add server", choiceAddServer))
+	}
+	return append(options, actions...)
+}
+
+func (m *model) gameRows(indent string) []huh.Option[string] {
+	var options []huh.Option[string]
+	for i, game := range m.games {
+		if !game.Def.IsServer() {
+			options = append(options, huh.NewOption(indent+m.gameLabel(i), strconv.Itoa(i)))
+		}
+	}
+	return options
+}
+
+func (m *model) serverRows() []huh.Option[string] {
+	var options []huh.Option[string]
+	for i, game := range m.games {
+		if game.Def.IsServer() {
+			options = append(options, huh.NewOption(rowIndent+m.gameLabel(i), strconv.Itoa(i)))
+		}
+	}
+	for i, dir := range m.missingServers {
+		label := fmt.Sprintf("%sSaved server — Not found  (%s)", rowIndent, dir)
+		options = append(options, huh.NewOption(label, missingPrefix+strconv.Itoa(i)))
+	}
+	return options
+}
+
+// sectionHeader is a menu row that only labels the rows below it; choosing
+// it reopens the menu.
+func sectionHeader(title string) huh.Option[string] {
+	return huh.NewOption("── "+title+" ──", choiceHeader)
+}
+
+func isServer(game app.Game) bool { return game.Def.IsServer() }
+
+func isGame(game app.Game) bool { return !game.Def.IsServer() }
+
+func (m *model) openAddServer() tea.Cmd {
+	m.screen = screenAddServer
+	field := huh.NewInput().Key("folder").Title("Add a server").
+		Description("Enter the folder the dedicated server is installed in (the one with the server's program in it).").
+		Placeholder("server folder")
+	form := huh.NewForm(huh.NewGroup(field)).WithShowHelp(false).WithKeyMap(keyMap()).WithTheme(huh.ThemeCharm())
+	return m.setForm(form)
+}
+
+// openForget asks whether to forget the saved server folder dir; esc and No
+// return to back.
+func (m *model) openForget(dir string, back screen) tea.Cmd {
+	m.forgetDir, m.forgetBack = dir, back
+	m.screen = screenForget
+	description := "Folder: " + dir + "\nThe folder and any pack installed in it are left as they are; " +
+		"the server is only removed from this list."
+	return m.setForm(confirmForm("Forget this server?", description))
 }
 
 func (m *model) openGame() tea.Cmd {
@@ -109,6 +205,9 @@ func (m *model) gameOptions(game app.Game) []huh.Option[string] {
 		}
 	default:
 		options = append(options, huh.NewOption("Remove pack", "remove"))
+	}
+	if game.Def.IsServer() {
+		options = append(options, huh.NewOption("Forget this server", "forget"))
 	}
 	return append(options, huh.NewOption("Back", "back"))
 }
@@ -156,6 +255,14 @@ func (m *model) openLeftoversConfirm(leftoversErr *engine.LeftoversError) tea.Cm
 }
 
 func confirmTexts(kind app.OpKind, game app.Game, pack remote.PackRef) (title, description string) {
+	title, description = operationTexts(kind, game, pack)
+	if game.Def.IsServer() {
+		description += "\nStop the server first."
+	}
+	return title, description
+}
+
+func operationTexts(kind app.OpKind, game app.Game, pack remote.PackRef) (title, description string) {
 	root := game.Install.RootDir
 	current := "the installed pack"
 	if marker := game.Status.Marker; marker != nil {

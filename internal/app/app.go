@@ -1,12 +1,13 @@
 // Package app implements the use cases the UI offers: loading the remote
-// library, detecting installed games, running install/remove operations, and
-// checking for app updates.
+// library, detecting installed games and saved servers, saving server
+// folders, running install/remove operations, and checking for app updates.
 package app
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Knurobroddy/crackers-tui/internal/detect"
@@ -47,13 +48,28 @@ type Updater interface {
 	Apply(ctx context.Context, release *update.Release) error
 }
 
-// Deps are the collaborators of App; Updater may be nil (updates disabled).
+// ServerStore keeps the server folders the player saved.
+type ServerStore interface {
+	Folders() ([]string, error)
+	Add(dir string) error
+	Forget(dir string) error
+}
+
+// ServerMatcher checks whether a folder holds a build of a server.
+type ServerMatcher interface {
+	Match(game detect.GameDef, dir string) (detect.Result, bool)
+}
+
+// Deps are the collaborators of App. Updater may be nil (updates disabled);
+// Servers and ServerMatcher may be nil (servers cannot be saved).
 type Deps struct {
-	Catalog   Catalog
-	Detector  Detector
-	Installer Installer
-	Status    StatusReader
-	Updater   Updater
+	Catalog       Catalog
+	Detector      Detector
+	Installer     Installer
+	Status        StatusReader
+	Updater       Updater
+	Servers       ServerStore
+	ServerMatcher ServerMatcher
 }
 
 // App runs the use cases the UI offers.
@@ -70,12 +86,19 @@ type Library struct {
 	Index *remote.Index
 }
 
-// Game is one detected install with its status.
+// Game is one detected install of a game or server with its status.
 type Game struct {
 	Install  detect.Result
 	Def      detect.GameDef
 	FilesKey string
 	Status   engine.Status
+}
+
+// Detection is what Detect found.
+type Detection struct {
+	Games          []Game   // detected games and servers, in games.json order
+	MissingServers []string // saved server folders that hold no supported server
+	ServersErr     error    // the saved server folders could not be read
 }
 
 // LoadLibrary fetches the games list, then the pack index.
@@ -91,15 +114,19 @@ func (a *App) LoadLibrary(ctx context.Context) (*Library, error) {
 	return &Library{Games: games, Index: index}, nil
 }
 
-// DetectGames finds installed games from library and reads each one's
-// status.
-func (a *App) DetectGames(ctx context.Context, library *Library) []Game {
+// Detect finds installed games and saved servers from library, reads each
+// one's status, and lists the saved server folders where nothing was found.
+func (a *App) Detect(ctx context.Context, library *Library) Detection {
 	results := a.deps.Detector.Detect(library.Games.Games, library.Index.GamesWithPacks())
 	games := make([]Game, 0, len(results))
 	for _, result := range results {
 		games = append(games, a.gameFor(ctx, result, library))
 	}
-	return games
+	missing, err := a.missingServers(games)
+	if err != nil {
+		slog.Warn("read saved servers", "err", err)
+	}
+	return Detection{Games: games, MissingServers: missing, ServersErr: err}
 }
 
 // UpdatesEnabled reports whether an Updater was configured.

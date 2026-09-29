@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "valheim-server-test",
+  "game_id": "valheim-server",
+  "name": "Test server pack",
+  "version": "2026.09.29",
+  "owned_dirs": [
+    "BepInEx"
+  ],
+  "preserve": [
+    "BepInEx/config",
+    "start_server_bepinex.sh"
+  ],
+  "files": {
+    "common": [
+      {
+        "url": "files/crackers-test.cfg",
+        "sha256": "0ec9ec430fc0f65d51dc782f5944b6dac39f71b3c71b1a17e1bf5f3ea09d36ad",
+        "size": 47,
+        "kind": "file",
+        "dest": "BepInEx/config/crackers-test.cfg"
+      },
+      {
+        "url": "files/SomeMod.dll",
+        "sha256": "1c74a507b6ca9f03499eb6e847c593d103470e345b0c914bd9fa59edcfd363c9",
+        "size": 24,
+        "kind": "file",
+        "dest": "BepInEx/plugins/SomeMod.dll"
+      }
+    ],
+    "windows": [
+      {
+        "url": "files/BepInExPack_Valheim.zip",
+        "sha256": "21afa4be26b0fbef7cbe6917b64a1874bbe9d289bfe003c31a4c7c3fc3e40838",
+        "size": 1944,
+        "kind": "zip",
+        "dest": "",
+        "zip_root": "BepInExPack_Valheim/"
+      }
+    ],
+    "linux": [
+      {
+        "url": "files/start_server_bepinex.sh",
+        "sha256": "68ba5a5d30bc6ad7d9ec95562c0a804e7b1494a38778ca2aaadc94b102ca4f13",
+        "size": 108,
+        "kind": "file",
+        "dest": "start_server_bepinex.sh"
+      }
+    ]
+  },
+  "hooks": [],
+  "loader": null
+}

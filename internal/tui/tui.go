@@ -29,6 +29,18 @@ const (
 	screenConfirm
 	screenProgress
 	screenResult
+	screenAddServer
+	screenForget
+)
+
+// Main menu choices other than a game's index.
+const (
+	choiceDetect    = "detect"
+	choiceQuit      = "quit"
+	choiceAddServer = "add-server"
+	choiceHeader    = "header"
+	missingPrefix   = "missing:" // + index into model.missingServers
+	rowIndent       = "  "       // rows below a section header
 )
 
 const (
@@ -75,7 +87,7 @@ type (
 		err     error
 	}
 	updateAppliedMsg struct{ err error }
-	gamesDetectedMsg struct{ games []app.Game }
+	gamesDetectedMsg struct{ detection app.Detection }
 	progressMsg      engine.Event
 	opDoneMsg        struct {
 		outcome app.Outcome
@@ -102,11 +114,15 @@ type model struct {
 	errText     string
 	retryAction retryAction
 
-	games       []app.Game
-	selected    int
-	op          app.Operation
-	confirmBack screen
-	packsKind   app.OpKind // what choosing on the pack list does (install or clean leftovers)
+	games          []app.Game
+	missingServers []string // saved server folders without a server
+	serversErr     error    // the saved servers could not be read
+	selected       int
+	op             app.Operation
+	confirmBack    screen
+	packsKind      app.OpKind // what choosing on the pack list does (install or clean leftovers)
+	forgetDir      string     // the server folder the forget screen asks about
+	forgetBack     screen
 
 	// operation in progress
 	busy       bool
@@ -189,6 +205,13 @@ func (m *model) back() (tea.Cmd, bool) {
 		return m.openGame(), true
 	case screenResult:
 		return m.startDetect(), true
+	case screenAddServer:
+		return m.openMain(), true
+	case screenForget:
+		if m.forgetBack == screenGame {
+			return m.openGame(), true
+		}
+		return m.openMain(), true
 	}
 	return nil, false
 }
@@ -241,7 +264,7 @@ func (m *model) startDetect() tea.Cmd {
 	}
 	m.screen = screenLoading
 	m.form = nil
-	m.loadingText = "Detecting games…"
+	m.loadingText = "Detecting games and servers…"
 	m.detectDone = false
 	return m.detectGamesCmd()
 }
@@ -265,6 +288,14 @@ func (m *model) startOp() tea.Cmd {
 	m.events = events
 	go runOperation(m.deps.App, m.op, events)
 	return m.listenCmd()
+}
+
+// showResult shows text on the result screen; continuing re-runs detection.
+func (m *model) showResult(ok bool, text string) tea.Cmd {
+	m.resultOK, m.resultText = ok, text
+	m.screen = screenResult
+	m.form = nil
+	return nil
 }
 
 func (m *model) resultMessage(err error, removed []string) string {

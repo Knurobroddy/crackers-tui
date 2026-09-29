@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/Knurobroddy/crackers-tui/internal/app"
 	"github.com/Knurobroddy/crackers-tui/internal/config"
 )
 
@@ -74,11 +76,14 @@ func (m *model) body() string {
 		b.WriteString(okStyle.Render("Updated — please restart " + config.AppName + "."))
 		b.WriteString("\n\nPress any key to exit.")
 	case screenMain:
-		if len(m.games) == 0 {
+		if !slices.ContainsFunc(m.games, isGame) {
 			b.WriteString(m.noGamesView(wrap))
 		}
+		if m.serversErr != nil {
+			b.WriteString(warnStyle.Inherit(wrap).Render("Saved servers could not be read: "+app.UserMessage(m.serversErr)) + "\n\n")
+		}
 		b.WriteString(m.form.View())
-	case screenUpdatePrompt, screenGame, screenPacks, screenConfirm:
+	case screenUpdatePrompt, screenGame, screenPacks, screenConfirm, screenAddServer, screenForget:
 		b.WriteString(m.form.View())
 	case screenProgress:
 		b.WriteString(m.progressView())
@@ -102,7 +107,8 @@ func (m *model) noGamesView(wrap lipgloss.Style) string {
 	if m.library != nil {
 		hasPacks := m.library.Index.GamesWithPacks()
 		for _, game := range m.library.Games.Games {
-			if !hasPacks[game.ID] {
+			// Servers are never searched for, so they have no place here.
+			if !hasPacks[game.ID] || game.IsServer() {
 				continue
 			}
 			line := "• " + boldStyle.Render(game.Name)
@@ -156,8 +162,10 @@ func (m *model) help() string {
 		return "↑/↓ move • enter select • q quit"
 	case screenUpdatePrompt:
 		return "←/→ choose • enter confirm • q quit"
-	case screenConfirm:
+	case screenConfirm, screenForget:
 		return "←/→ choose • enter confirm • esc back • q quit"
+	case screenAddServer:
+		return "enter confirm • esc back • ctrl+c quit"
 	}
 	return "↑/↓ move • enter select • esc back • q quit"
 }
